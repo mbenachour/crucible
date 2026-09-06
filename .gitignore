@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+*.sqlite
+*.sqlite-*
+checkpoints.sqlite*
+findings.sqlite*
+.crucible-workspace/
+.pytest_cache/
+.ruff_cache/
+*.o
+*.a

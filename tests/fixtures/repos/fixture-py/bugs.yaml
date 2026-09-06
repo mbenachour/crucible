@@ -1,0 +1,19 @@
+# Ground-truth manifest for recall measurement (specs.md §12).
+# fixture-py: injection classes.
+fixture: fixture-py
+primary_language: py
+bugs:
+  - id: py-cmdi-1
+    attack_class: command_injection
+    file: app/ping.py
+    line_start: 7
+    line_end: 8
+    summary: user-supplied host concatenated into a shell command (shell=True)
+    expected_severity: high
+  - id: py-deser-1
+    attack_class: unsafe_deserialization
+    file: app/cache.py
+    line_start: 9
+    line_end: 10
+    summary: pickle.loads on attacker-controlled cache payload
+    expected_severity: high

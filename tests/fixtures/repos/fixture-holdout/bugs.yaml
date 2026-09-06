@@ -1,0 +1,14 @@
+# fixture-holdout: NEVER used for prompt tuning (specs.md §12, §14.11).
+# Prompt updates are tested here to confirm coverage actually moved rather
+# than overfitting to the tuning set. Keep this manifest sealed; only the
+# regression harness reads it.
+fixture: fixture-holdout
+primary_language: py
+bugs:
+  - id: hold-ti-1
+    attack_class: template_injection
+    file: app/render.py
+    line_start: 8
+    line_end: 9
+    summary: user input passed as the template string to a Jinja Environment
+    expected_severity: high
