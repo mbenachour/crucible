@@ -34,7 +34,7 @@ BUILTIN_ATTACK_CLASSES = [
 ]
 
 
-def run(state: CrucibleState) -> CrucibleState:
+def run(state: CrucibleState, deps=None) -> CrucibleState:
     # TODO(phase1):
     #   1. slice repo into subsystems; spawn RECON_SUBAGENTS with ModelRole.RECON
     #   2. deterministic merge -> workspace/architecture.md

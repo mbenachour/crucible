@@ -17,7 +17,7 @@ from crucible.graph.state import CrucibleState
 from crucible.validation import mechanical
 
 
-def run(state: CrucibleState) -> CrucibleState:
+def run(state: CrucibleState, deps=None) -> CrucibleState:
     for finding_id in state["finding_ids"]:
         result = mechanical.check_finding(
             finding_id,

@@ -13,7 +13,7 @@ from __future__ import annotations
 from crucible.graph.state import CrucibleState
 
 
-def run(state: CrucibleState) -> CrucibleState:
+def run(state: CrucibleState, deps=None) -> CrucibleState:
     # TODO(phase1): for each finding that passed Pass A
     #   - run ModelRole.VALIDATOR_BUG with a disprove-oriented prompt
     #   - classify the response (llm/classify.py) before parsing

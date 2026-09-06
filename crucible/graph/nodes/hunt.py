@@ -28,7 +28,7 @@ from crucible.graph.state import CrucibleState
 HUNT_TOOLS = ["bash", "read", "grep", "sandbox_exec", "fork_sibling", "wishlist_write"]
 
 
-def run(state: CrucibleState) -> CrucibleState:
+def run(state: CrucibleState, deps=None) -> CrucibleState:
     # TODO(phase1): for each pending HuntTask
     #   - load attack-class front-matter for all classes, full body for this one
     #     (progressive disclosure, §7)

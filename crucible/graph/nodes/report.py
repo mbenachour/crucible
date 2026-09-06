@@ -9,7 +9,7 @@ from __future__ import annotations
 from crucible.graph.state import CrucibleState
 
 
-def run(state: CrucibleState) -> CrucibleState:
+def run(state: CrucibleState, deps=None) -> CrucibleState:
     # TODO(phase1): select findings upheld by Pass B AND Pass C from the store;
     # render report.json (+ optional markdown) into the workspace with full
     # provenance (model + prompt version + sampling params per finding).

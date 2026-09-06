@@ -17,7 +17,7 @@ from __future__ import annotations
 from crucible.graph.state import CrucibleState
 
 
-def run(state: CrucibleState) -> CrucibleState:
+def run(state: CrucibleState, deps=None) -> CrucibleState:
     # TODO(phase1): for each finding upheld by Pass B
     #   - run ModelRole.VALIDATOR_REACH scoped to this repo only
     #   - persist verdict {upheld|refuted} + reasoning
