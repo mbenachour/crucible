@@ -196,34 +196,57 @@ class, and an always-on area × baseline sweep), `risk` (a reflection fact),
 produces a queue). **Recon quality drives everything downstream** — Cloudflare's
 validation-rejection rate dropped 40%→11% largely from better context here.
 
-### 4.2 `hunt.py` — Hunt (§9.2)  · *stub*
+### 4.2 `hunt.py` — Hunt (§9.2)  · *wired — two-phase agent per cell; sandbox-executing; feeds the validate queue*
 
 One task = **one attack class + one scope hint + `architecture.md` + prior
 coverage**. Never "find vulnerabilities in this repo" — narrow scoping is what
 makes the model behave like a researcher instead of wandering.
 
-- **Over-reports by design.** Success is not Hunt precision; it is how sharply the
-  funnel refines raw output before a human sees it.
-- **Moves past reading into execution.** Hunters compile fragments, build small
-  versions, and attack them in the sandbox. Cloudflare's biggest single quality
-  jump came from giving Hunters a sandbox to crash binaries in.
-- **Tools** (`HUNT_TOOLS`): `bash` (general purpose — the model designs its own
-  approach), scoped `read`/`grep`, `sandbox_exec`, `fork_sibling`,
-  `wishlist_write`. Every invocation is counted (§1.12).
-- **Progressive disclosure** (§7): load only front-matter for every attack-class
-  skill; load the full methodology body only for the scoped class.
-- **Sibling forking:** a Hunter tripping over an interesting path outside scope
-  forks a sibling with a precise structural seed rather than wandering. Fork rate
-  is model-dependent and tracked as an open-weight selection metric.
-- **Shallow detection:** a node that finishes fast with zero findings *and* zero
-  forks is marked shallow and re-queued once (usually a crashed dependency, not
-  clean code).
+**Node flow.** Pops up to `HUNT_MAX_TASKS_PER_RUN` cells (env
+`CRUCIBLE_HUNT_MAX_TASKS`, default 6) off the head of `pending_hunts` per
+invocation; the bounded-continuation self-loop (§8, cap 3) re-enters for the
+next batch, so the effective ceiling is `MAX_TASKS * 4`, and `continuation_count`
+is incremented here so the gate cannot loop forever. Whatever is unhunted when
+the continuation cap is hit is left for Gapfill (Phase 2). Per cell:
 
-Output is validated against the `Finding` schema (5.1) with the **tautology
-deny-list** applied at parse time (no model call). Three failure modes designed
-against: (a) editing source so the exploit works → killed by the PoC gate; (b)
-tautological test → killed by the deny-list; (c) exploit runs but the threat model
-is nonsense → killed by the `threat_model` requirement.
+1. **Explore** — a plain ReAct agent (`build_agent` on `ModelRole.HUNTER`, the
+   same middleware stack Recon uses) with a per-task budget of
+   `CRUCIBLE_HUNT_EXPLORE_LIMIT` model calls (default 14; the §8
+   `MODEL_CALLS_PER_TASK` hard cap still bounds it). Tools: `list_dir` /
+   `read_file` / `search` (read-only, repo-rooted), `sandbox_exec` (a
+   per-task Docker container — `/src` ro, `/scratch` writable, no egress),
+   `fork_sibling`, `wishlist_write`. `ToolGateMiddleware` enforces the set;
+   every call is counted (§1.12).
+2. **Emit** — one forced `tool_choice=HuntResult` call over a fresh message list
+   built from a digest of the exploration transcript (small open-weight models
+   almost never call an emit-tool on their own, and `create_agent` discards a
+   plain-text answer — same reason Recon splits R1/R2). `HuntResult` carries an
+   optional `Finding` plus a `negative_note`, so a reasoned negative is
+   first-class coverage.
+3. **Parse-time filters (no model call):** the **tautology deny-list**
+   (`validation/schema.tautology_reasons`) drops a finding whose attacker
+   privilege already implies its impact.
+4. **Persist:** surviving findings → `workspace/findings/<id>.json` +
+   `FindingRow` (`status='raw'`, Hunter model / prompt-version / sampling
+   provenance, `stable_key` for cross-run dedup); wishes → `WishRow`;
+   `coverage/<area>.md` gets the finding line or the negative note; the
+   workspace is git-committed.
+
+- **Over-reports by design** *(prompt-tuning target, issue #3)* — the current
+  open-weight Hunter (deepseek-v4-flash) tends to file careful negatives rather
+  than over-report; tightening that is skill-prompt work against the fixtures.
+- **Sibling forking:** `fork_sibling` writes a `risk` chunk to
+  `workspace/recon/forks.jsonl`, drained into `pending_hunts` for the next
+  continuation (bounded by `MAX_FORKS_PER_RUN`). Fork rate is tracked per model.
+- **Shallow detection (§13):** a cell whose explore made `< SHALLOW_TOOLCALLS`
+  tool calls and produced no finding is re-queued once (a crashed dependency
+  looks like a fast clean pass). An explore that ends on a provider 400
+  (dangling `tool_calls`) is caught per-cell and still goes to the emit phase.
+
+Three failure modes designed against: (a) editing source so the exploit works →
+killed by the PoC gate; (b) tautological test → killed by the deny-list; (c)
+exploit runs but the threat model is nonsense → killed by the `threat_model`
+requirement.
 
 ### 4.3 `validate_mechanical.py` — Validate Pass A (§9.4)  · *wired → `validation/mechanical.py`*
 
@@ -736,7 +759,8 @@ Constants worth knowing: `hooks.MAX_CONTINUATIONS = 3`,
 | Per-tool instrumentation | done |
 | Sandbox provider | Docker backend wired + smoke-tested (create/exec/destroy, ro-mount, no-egress); escape-test suite still owed (§14.7) |
 | Domain store (all tables + DAO) | done |
-| Recon / Hunt / Validate-bug / Validate-reach / Report bodies | stub |
+| Recon / Hunt bodies | wired (real agents, sandbox exec, guided-JSON emit) |
+| Validate-bug / Validate-reach / Report bodies | stub |
 | Prompts | 28 attack-class methodologies (full builtin taxonomy) + 2 validators + 3 recon; fixture tuning owed (#3) |
 | Golden fixtures + manifests | seeded |
 

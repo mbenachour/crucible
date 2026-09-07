@@ -108,7 +108,7 @@ side effects (filesystem, stores, model calls, queue feedback).
 | `crucible/graph/hooks.py` | §7 offload/compaction, §8 continuation gate | gate done, offload stub |
 | `crucible/graph/nodes/recon.py` | §9.1 + issue #5 | **R0 seed + R3 decompose done; R1/R2 model steps wired** |
 | `crucible/recon/` | issue #5 — `seed.py` (R0), `decompose.py` (R3), `schema.py` | done (deterministic) |
-| `crucible/graph/nodes/hunt.py` | §9.2 | stub |
+| `crucible/graph/nodes/hunt.py` | §9.2 | wired — two-phase Hunter agent per cell (explore + forced `HuntResult` emit), per-task Docker sandbox exec, tautology deny-list at parse time, findings persisted with provenance, `coverage/<area>.md`; prompt-tuning for over-reporting owed (#3) |
 | `crucible/graph/nodes/validate_mechanical.py` | §9.4 Pass A | wired → `validation/mechanical.py` |
 | `crucible/graph/nodes/validate_bug.py` | §9.4 Pass B | stub |
 | `crucible/graph/nodes/validate_reachability.py` | §9.4 Pass C | stub |
@@ -201,9 +201,11 @@ crucible run --repo <path-to-target-checkout>
 | `--resume <run_id>` | — | continue a run from its last checkpoint |
 | `--no-sandbox` | off | skip the Docker boot check (nodes needing exec will fail) |
 
-Phase 1 status: Recon is implemented; Hunt/Validate/Report are stubs, so a run
-exits at `stopped at stub node: hunt` (code 3) after Recon writes its artifacts
-and checkpoints.
+Phase 1 status: Recon and Hunt are implemented; Validate (bug/reach) and Report
+are stubs, so a run exits at `stopped at stub node: validate_bug` (code 3) after
+Hunt writes `coverage/`, any `findings/`, and checkpoints. Hunt needs a Hunter
+model that is actually reachable — set `HUNTER_LLM=deepseek` (or pull the Ollama
+default) alongside `RECON_LLM`.
 
 ### Logs & tracing
 

@@ -19,6 +19,11 @@ def init_workspace(workspace_path: str | Path) -> Path:
         (ws / sub).mkdir(exist_ok=True)
     if not (ws / ".git").exists():
         _git(ws, "init", "-q")
+        # Pin a local identity so `commit_node` actually records commits even
+        # when the host has no global git user (CI, fresh containers). The
+        # workspace history is the per-node audit trail (§7).
+        _git(ws, "config", "user.email", "crucible@localhost")
+        _git(ws, "config", "user.name", "crucible")
         _git(ws, "commit", "--allow-empty", "-q", "-m", "workspace: init")
     return ws
 
