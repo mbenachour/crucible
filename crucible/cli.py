@@ -2,12 +2,26 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from pathlib import Path
 
 import typer
 
 app = typer.Typer(add_completion=False, help="Crucible — vulnerability discovery harness (Phase 1)")
+
+
+def _load_dotenv(path: str | os.PathLike = ".env") -> None:
+    """Minimal .env loader (no dependency). Existing env vars win."""
+    p = Path(path)
+    if not p.is_file():
+        return
+    for line in p.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        os.environ.setdefault(key.strip(), val.strip().strip('"').strip("'"))
 
 
 @app.command()
@@ -21,6 +35,7 @@ def run(
     no_sandbox: bool = typer.Option(False, "--no-sandbox", help="skip Docker sandbox boot check"),
 ) -> None:
     """Recon -> Hunt -> Validate -> Report, end to end (§14.1)."""
+    _load_dotenv()
     from crucible.config import load_registry
     from crucible.graph.build import build_graph
     from crucible.graph.deps import NodeDeps
@@ -80,6 +95,7 @@ def status(
     store_url: str = typer.Option("sqlite:///findings.sqlite", "--store-url"),
 ) -> None:
     """Report fork rate and per-tool invocation counts (§14.10)."""
+    _load_dotenv()
     from crucible.store.dao import Store
 
     store = Store(store_url)
