@@ -130,26 +130,93 @@ LangGraph `SqliteSaver` holds **execution** state (`checkpoints.sqlite`).
 `crucible/store/` holds **domain** state (`findings.sqlite`) — findings must
 outlive and be queryable independently of any run.
 
-## Run
+## Install, build, use
+
+### Prerequisites
+- Python ≥ 3.11
+- **Docker** running (the sandbox backend; skip with `--no-sandbox`)
+- An LLM provider — local **Ollama** (default) or **DeepSeek** (hosted)
+
+### Install (development)
 
 ```bash
-pip install -e ".[dev]"
-crucible run --repo tests/fixtures/repos/fixture-py     # end-to-end (stops at first stub node)
-crucible status <run_id>                                # fork rate + per-tool counts (§14.10)
-pytest                                                 # deterministic units pass today
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"          # editable install + pytest/ruff
+crucible --help
 ```
 
-**Models.** Provider-configurable via `crucible/llm/registry.py` — wired:
-`ollama` (local, default) and `deepseek` (hosted, OpenAI-compatible). Defaults
-use Ollama with different lineages for hunter vs validator (the §6 assertion):
+### Models
+
+Provider-configurable via `crucible/llm/registry.py`. Wired providers: `ollama`
+(local, default) and `deepseek` (hosted, OpenAI-compatible). Defaults use Ollama
+with **different lineages** for hunter vs validator (the §6 assertion):
 
 ```bash
-ollama serve && ollama pull qwen2.5-coder:7b && ollama pull llama3.1:8b
+ollama serve
+ollama pull qwen2.5-coder:7b     # recon + hunter
+ollama pull llama3.1:8b          # validators
 ```
 
-Override per role in `crucible.toml` (`[models.hunter] provider="deepseek"
-model="deepseek-chat"`, key via `DEEPSEEK_API_KEY`) or env
-(`CRUCIBLE_PROVIDER_HUNTER`, `CRUCIBLE_MODEL_HUNTER`, `CRUCIBLE_API_KEY_HUNTER`).
+Override per role, highest precedence last: `crucible/config.py` defaults →
+`crucible.toml` → env vars.
+
+```toml
+# crucible.toml — put a hosted model in the Hunter slot
+[models.hunter]
+provider = "deepseek"
+model    = "deepseek-chat"       # api key via DEEPSEEK_API_KEY
+```
+
+```bash
+# or entirely by env
+export CRUCIBLE_PROVIDER_HUNTER=deepseek
+export CRUCIBLE_MODEL_HUNTER=deepseek-chat
+export CRUCIBLE_API_KEY_HUNTER=sk-...        # else DEEPSEEK_API_KEY
+```
+
+Secrets: put `DEEPSEEK_API_KEY=sk-...` in a `.env` at the repo root (gitignored;
+loaded automatically by `crucible run` / `status`).
+
+### Run
+
+```bash
+crucible run --repo <path-to-target-checkout>
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--repo` | *(required)* | read-only checkout to audit |
+| `--workspace` | `.crucible-workspace` | agent-writable, git-initialised working tree |
+| `--checkpoint-db` | `checkpoints.sqlite` | LangGraph execution state (resume) |
+| `--store-url` | `sqlite:///findings.sqlite` | domain store (findings, validations, tool usage) |
+| `--config` | `crucible.toml` | model config file |
+| `--resume <run_id>` | — | continue a run from its last checkpoint |
+| `--no-sandbox` | off | skip the Docker boot check (nodes needing exec will fail) |
+
+Phase 1 status: the pipeline nodes are still stubs, so a run exits at
+`stopped at stub node: recon` (code 3) after initialising the workspace, the run
+row, and the checkpoint. Everything up to the node boundary is real.
+
+```bash
+# smoke test the whole substrate against a fixture
+crucible run --repo tests/fixtures/repos/fixture-py --no-sandbox
+crucible status <run_id>          # fork rate + per-(role,tool) invocation counts (§14.10)
+```
+
+### Build a distributable
+
+```bash
+pip install build
+python -m build                  # -> dist/crucible-<v>-py3-none-any.whl + .tar.gz
+pipx install dist/crucible-*.whl # or: pip install dist/crucible-*.whl
+```
+
+### Tests
+
+```bash
+pytest                           # 34 deterministic units, no network / no Docker
+pytest tests/test_cli.py -v      # CLI smoke: help, status, run-to-stub
+```
 
 ## What Phase 1 "done" needs (specs.md §14)
 
