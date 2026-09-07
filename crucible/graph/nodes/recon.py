@@ -21,6 +21,7 @@ import logging
 import time
 from pathlib import Path
 
+from crucible.config import MODEL_CALLS_PER_TASK
 from crucible.graph.state import CrucibleState
 from crucible.obs import span
 from crucible.recon.decompose import decompose, render_architecture, task_cap
@@ -31,9 +32,13 @@ from crucible.workspace.fs import commit_node
 log = logging.getLogger("crucible.recon")
 
 RECON_SUBAGENTS = 3
-# Keep above 2x the model-call limit so ModelCallLimitMiddleware's graceful
-# stop wins over a hard GraphRecursionError.
-RECON_RECURSION_LIMIT = 150
+# Every agent loop iteration costs 4 LangGraph super-steps
+# (ModelCallLimitMiddleware.before_model → model → after_model → tools), not 2,
+# so the recursion limit must sit above 4x the model-call cap (plus a margin for
+# start / structured-output / after_agent steps). Otherwise a model that keeps
+# calling read tools without emitting structured output trips a hard
+# GraphRecursionError before ModelCallLimitMiddleware's graceful "end" fires.
+RECON_RECURSION_LIMIT = 4 * MODEL_CALLS_PER_TASK + 20
 
 
 def run(state: CrucibleState, deps=None) -> CrucibleState:
