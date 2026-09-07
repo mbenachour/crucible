@@ -106,7 +106,8 @@ side effects (filesystem, stores, model calls, queue feedback).
 | `crucible/graph/build.py` | §4 topology + checkpointer | wired |
 | `crucible/graph/state.py` | §5 `CrucibleState` (pointers/counters only) | done |
 | `crucible/graph/hooks.py` | §7 offload/compaction, §8 continuation gate | gate done, offload stub |
-| `crucible/graph/nodes/recon.py` | §9.1 | stub |
+| `crucible/graph/nodes/recon.py` | §9.1 + issue #5 | **R0 seed + R3 decompose done; R1/R2 model steps wired** |
+| `crucible/recon/` | issue #5 — `seed.py` (R0), `decompose.py` (R3), `schema.py` | done (deterministic) |
 | `crucible/graph/nodes/hunt.py` | §9.2 | stub |
 | `crucible/graph/nodes/validate_mechanical.py` | §9.4 Pass A | wired → `validation/mechanical.py` |
 | `crucible/graph/nodes/validate_bug.py` | §9.4 Pass B | stub |

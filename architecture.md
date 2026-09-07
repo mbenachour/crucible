@@ -168,22 +168,33 @@ and git-commits the workspace on exit. In the target architecture each stage is 
 `create_agent` + middleware stack; today the model-facing bodies are stubs with
 the spec contract in the docstring.
 
-### 4.1 `recon.py` — Recon (§9.1)  · *stub*
+### 4.1 `recon.py` — Recon (§9.1, issue #5)  · *R0 + R3 done; R1 + R2 wired*
 
-Fans out N subagents (default `RECON_SUBAGENTS = 3`) over subsystem slices. A
-deterministic merger writes:
+Four sub-steps in one node (shape from Visa VVAH S0–S3 / Glasswing's "threat
+model builder"), implemented in `crucible/recon/`:
 
-- **`workspace/architecture.md`** — build commands, entry points, trust
-  boundaries, external inputs, likely attack surface.
-- **`workspace/taxonomy.json`** — attack classes for *this* repo. Starts from
-  `BUILTIN_ATTACK_CLASSES` (~10: injection variants, memory corruption, protocol
-  parsing, timing side channels) and lets Recon **invent repo-specific classes**,
-  each with its own methodology.
+| Step | Module | Model? | Artifact |
+|---|---|---|---|
+| **R0 seed** | `recon/seed.py` | no | `workspace/recon/seed.json` — file index + roles, framework detection, repo-kind, build/run commands, framework-aware entry points classified into 7 kinds (`network/framework/ipc/file/cli/deserialization/other`), reflection/dynamic-dispatch facts, tree-sitter name-based call graph |
+| **R1 map** | `recon/decompose.render_architecture` + fan-out | RECON | `workspace/architecture.md` — N `build_agent` calls over LOC-balanced slices, `response_format=MapContribution`, deterministic render |
+| **R2 threat model** | node `_run_threatmodel` | RECON | `workspace/recon/threat_model.json` — `response_format=ThreatModel`; attackers, assets, trust boundaries, STRIDE, repo-specific classes |
+| **R3 decompose** | `recon/decompose.decompose` | no | seeds `state["pending_hunts"]` + `workspace/recon/task_manifest.json` |
 
-Then it deterministically seeds `pending_hunts` as `(area × attack_class)` cells,
-bounded by the run task cap. **Recon quality drives everything downstream** —
-Cloudflare's validation-rejection rate dropped 40%→11% largely from better
-context here, so Recon prompt regressions are treated as critical.
+**Repo-kind → baseline attack classes** (`BASELINE_BY_KIND`): `web_api` → OWASP-ish,
+`native` → memory-safety, `mobile` → MASVS-ish, `library`/`iac`/`cli`/`unknown`.
+Pruned against the primary language (`LANG_INCOMPATIBLE` — no memory classes in
+Python/JS). Per-entry-point class choice is framework-aware (an Express route in
+a mobile repo still gets web classes).
+
+**Typed hunt chunks** (`HuntTask.chunk_type`): `taint` (entry point + a dynamic
+sink nearby → `file:line -> file:line`, priority 1), `catch_all` (entry point ×
+class, and an always-on area × baseline sweep), `risk` (a reflection fact),
+`specialist` / `threat_fallback` (from R2).
+
+**Resilience:** no registry, or an R1/R2 model failure → logged to
+`workspace/recon/errors.jsonl`, the run continues on the seed alone (R3 still
+produces a queue). **Recon quality drives everything downstream** — Cloudflare's
+validation-rejection rate dropped 40%→11% largely from better context here.
 
 ### 4.2 `hunt.py` — Hunt (§9.2)  · *stub*
 
