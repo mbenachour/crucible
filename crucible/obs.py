@@ -74,6 +74,29 @@ def _otel_requested() -> bool:
     return bool(os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")) or _truthy("CRUCIBLE_OTEL")
 
 
+_DEFAULT_OTLP_ENDPOINT = "http://localhost:4318"
+
+
+def _otlp_endpoint() -> str:
+    return os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT") or _DEFAULT_OTLP_ENDPOINT
+
+
+def _endpoint_reachable(url: str, timeout: float = 0.6) -> bool:
+    """Cheap TCP preflight so we don't wire an exporter that will spam retries
+    and hang on shutdown against a dead collector."""
+    import socket
+    from urllib.parse import urlparse
+
+    p = urlparse(url if "://" in url else f"http://{url}")
+    host = p.hostname or "localhost"
+    port = p.port or (443 if p.scheme == "https" else 4318)
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def setup_tracing() -> str:
     """Wire tracing per env. Returns the mode: '', 'langsmith', 'otel', 'both'."""
     global _TRACING_ENABLED
@@ -93,6 +116,15 @@ def setup_tracing() -> str:
         )
 
     if otel:
+        endpoint = _otlp_endpoint()
+        if not _endpoint_reachable(endpoint):
+            log.warning(
+                "OTLP collector at %s is unreachable — skipping OTLP tracing "
+                "(start a collector or unset CRUCIBLE_OTEL / OTEL_EXPORTER_OTLP_ENDPOINT).",
+                endpoint,
+            )
+            otel = False
+    if otel:
         try:
             from opentelemetry import trace
             from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -106,15 +138,19 @@ def setup_tracing() -> str:
             )
             otel = False
         else:
+            # Quiet the exporter's retry chatter and bound its blocking.
+            logging.getLogger("opentelemetry.exporter.otlp").setLevel(logging.ERROR)
+            os.environ.setdefault("OTEL_BSP_EXPORT_TIMEOUT", "3000")
             provider = TracerProvider(resource=Resource.create({"service.name": "crucible"}))
-            provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+            provider.add_span_processor(
+                BatchSpanProcessor(OTLPSpanExporter(timeout=3), export_timeout_millis=3000)
+            )
             trace.set_tracer_provider(provider)
             os.environ.setdefault("LANGSMITH_TRACING", "true")
             os.environ.setdefault("LANGSMITH_OTEL_ENABLED", "true")
             if not ls:
                 # data-residency path: spans to the local collector ONLY
                 os.environ.setdefault("LANGSMITH_OTEL_ONLY", "true")
-            endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "(OTLP default :4318)")
             log.info(
                 "OTLP tracing enabled — spans to %s%s",
                 endpoint, "" if ls else " (local-only)",
