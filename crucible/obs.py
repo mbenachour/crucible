@@ -1,19 +1,22 @@
-"""Observability — logging + optional OpenTelemetry tracing (specs.md §13).
-
-Two independent things:
+"""Observability — logging + optional tracing (specs.md §13).
 
 1. **Logging** — always on. Console (INFO) + a per-run file at
    ``<workspace>/run.log`` (DEBUG). `configure_logging()` is called once by the
    CLI; library modules just use ``logging.getLogger(__name__)``.
 
-2. **Tracing** — opt-in, **local-only by default**. Enabled when
-   ``CRUCIBLE_OTEL`` is truthy or ``OTEL_EXPORTER_OTLP_ENDPOINT`` is set. Spans
-   go to your OTLP collector (Jaeger / Tempo / SigNoz / OpenObserve / Langfuse),
-   never to LangChain's cloud — we force ``LANGSMITH_OTEL_ONLY=true``. For a
-   data-residency product, customer-code-derived traces must not leave the box.
+2. **Tracing** — opt-in, three modes chosen by env (`setup_tracing()`):
 
-`span()` is a no-op context manager when tracing is disabled, so nodes can wrap
-work unconditionally.
+   - **LangSmith** — ``LANGSMITH_TRACING=true`` + ``LANGSMITH_API_KEY``.
+     LangChain/LangGraph auto-trace to LangSmith; we just default
+     ``LANGSMITH_PROJECT``. Per specs §13 this is the *internal-dev* path.
+   - **Local OTLP** — ``CRUCIBLE_OTEL`` truthy or ``OTEL_EXPORTER_OTLP_ENDPOINT``
+     set (and LangSmith *not* configured). Spans go to your OTLP collector only
+     (``LANGSMITH_OTEL_ONLY=true``) — the data-residency path.
+   - **Both** — LangSmith configured *and* an OTLP endpoint set: spans fan out to
+     both.
+
+`span()` is a no-op context manager unless a local OTLP provider was installed,
+so nodes can wrap work unconditionally.
 """
 
 from __future__ import annotations
@@ -57,45 +60,68 @@ def configure_logging(workspace_path: str | os.PathLike | None = None, *, level:
 
 # --------------------------------------------------------------------- tracing
 
-def _tracing_requested() -> bool:
-    return bool(
-        os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
-        or os.environ.get("CRUCIBLE_OTEL", "").lower() in ("1", "true", "yes", "on")
+def _truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _langsmith_requested() -> bool:
+    return bool(os.environ.get("LANGSMITH_API_KEY")) and (
+        _truthy("LANGSMITH_TRACING") or _truthy("LANGCHAIN_TRACING_V2")
     )
 
 
-def setup_tracing() -> bool:
-    """Wire LangChain/LangGraph → OTLP if requested. Returns whether it engaged."""
+def _otel_requested() -> bool:
+    return bool(os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")) or _truthy("CRUCIBLE_OTEL")
+
+
+def setup_tracing() -> str:
+    """Wire tracing per env. Returns the mode: '', 'langsmith', 'otel', 'both'."""
     global _TRACING_ENABLED
     log = logging.getLogger(LOGGER_NAME)
-    if not _tracing_requested():
-        return False
-    try:
-        from opentelemetry import trace
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-        from opentelemetry.sdk.resources import Resource
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
-    except ImportError:
-        log.warning(
-            "tracing requested but OpenTelemetry is not installed — run "
-            "`pip install \"crucible[otel]\"`. Continuing without traces."
+    ls = _langsmith_requested()
+    otel = _otel_requested()
+    if not ls and not otel:
+        return ""
+
+    if ls:
+        os.environ.setdefault("LANGSMITH_PROJECT", "crucible")
+        os.environ["LANGSMITH_TRACING"] = "true"  # normalise
+        endpoint = os.environ.get("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
+        log.info(
+            "LangSmith tracing enabled — project=%s endpoint=%s",
+            os.environ["LANGSMITH_PROJECT"], endpoint,
         )
-        return False
 
-    provider = TracerProvider(resource=Resource.create({"service.name": "crucible"}))
-    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
-    trace.set_tracer_provider(provider)
+    if otel:
+        try:
+            from opentelemetry import trace
+            from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+            from opentelemetry.sdk.resources import Resource
+            from opentelemetry.sdk.trace import TracerProvider
+            from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        except ImportError:
+            log.warning(
+                "OTLP tracing requested but OpenTelemetry is not installed — run "
+                "`pip install \"crucible[otel]\"`. Continuing without OTLP."
+            )
+            otel = False
+        else:
+            provider = TracerProvider(resource=Resource.create({"service.name": "crucible"}))
+            provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+            trace.set_tracer_provider(provider)
+            os.environ.setdefault("LANGSMITH_TRACING", "true")
+            os.environ.setdefault("LANGSMITH_OTEL_ENABLED", "true")
+            if not ls:
+                # data-residency path: spans to the local collector ONLY
+                os.environ.setdefault("LANGSMITH_OTEL_ONLY", "true")
+            endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "(OTLP default :4318)")
+            log.info(
+                "OTLP tracing enabled — spans to %s%s",
+                endpoint, "" if ls else " (local-only)",
+            )
+            _TRACING_ENABLED = True
 
-    # Make LangChain emit OTel spans to our provider, and ONLY there.
-    os.environ.setdefault("LANGSMITH_TRACING", "true")
-    os.environ.setdefault("LANGSMITH_OTEL_ENABLED", "true")
-    os.environ.setdefault("LANGSMITH_OTEL_ONLY", "true")
-
-    endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "(OTLP default :4318)")
-    log.info("tracing enabled — exporting spans to %s (local-only)", endpoint)
-    _TRACING_ENABLED = True
-    return True
+    return "both" if (ls and otel) else "langsmith" if ls else "otel" if otel else ""
 
 
 @contextlib.contextmanager

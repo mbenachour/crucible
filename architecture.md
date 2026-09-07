@@ -675,13 +675,20 @@ Constants worth knowing: `hooks.MAX_CONTINUATIONS = 3`,
     are logged (`→ recon` / `✓ recon 34.4s` / `✗ hunt failed …`); Recon logs
     per-phase counts and timings (R0/R1/R2/R3); `_log_error` mirrors every
     `recon/errors.jsonl` line to the log.
-  - **Tracing** opt-in, **local-only**. Set `CRUCIBLE_OTEL=1` or
-    `OTEL_EXPORTER_OTLP_ENDPOINT` → `setup_tracing()` wires an OTLP
-    `TracerProvider` and sets `LANGSMITH_OTEL_ENABLED` + **`LANGSMITH_OTEL_ONLY=true`**
-    so LangChain/LangGraph emit spans **only** to your collector (Jaeger / Tempo /
-    SigNoz / OpenObserve / Langfuse), never to LangChain's cloud. `span()` is a
-    no-op when tracing is off. Needs the `otel` extra
-    (`pip install "crucible[otel]"`); missing → a warning, run continues.
+  - **Tracing** opt-in, three modes (`setup_tracing()` returns
+    `'' | 'langsmith' | 'otel' | 'both'`):
+    - **LangSmith** — `LANGSMITH_TRACING=true` + `LANGSMITH_API_KEY`. LangChain
+      auto-traces every model / tool / middleware span to LangSmith;
+      `LANGSMITH_PROJECT` defaults to `crucible`. specs §13's internal-dev path.
+    - **Local OTLP** — `CRUCIBLE_OTEL=1` or `OTEL_EXPORTER_OTLP_ENDPOINT` (and
+      LangSmith not configured) → an OTLP `TracerProvider` +
+      **`LANGSMITH_OTEL_ONLY=true`** so spans go **only** to your collector
+      (Jaeger / Tempo / SigNoz / OpenObserve / Langfuse), never LangChain's
+      cloud. Needs `pip install "crucible[otel]"`; missing → warning, run
+      continues.
+    - **Both** — LangSmith vars *and* an OTLP endpoint → fan out to both.
+    `span()` opens an OTel span only in the OTLP modes; a no-op otherwise
+    (LangSmith mode traces via LangChain's own callbacks).
   - `run_id` is the LangGraph `thread_id`, so a resumed run's turns group into
     one trace/thread.
   - Per-tool counts still go to the SQLite `tool_usage` table

@@ -206,19 +206,30 @@ Every run logs to the console and to `<workspace>/run.log` (DEBUG) — per-node
 entry/exit + durations, Recon phase counts, and every `recon/errors.jsonl` line.
 `CRUCIBLE_LOG_LEVEL=DEBUG` for more on the console.
 
-Distributed tracing is opt-in and **local-only**:
+Distributed tracing is opt-in — three modes, chosen by env (`crucible/obs.py`):
+
+**LangSmith** (internal-dev path, specs §13) — full agent traces: every model
+call, tool call, and middleware span, grouped by `run_id`.
+
+```bash
+export LANGSMITH_TRACING=true
+export LANGSMITH_API_KEY=lsv2_...
+export LANGSMITH_PROJECT=crucible          # defaulted if unset
+crucible run --repo <path>
+```
+
+**Local OTLP only** (data-residency path) — spans go **only** to your collector
+(Jaeger / Tempo / SigNoz / OpenObserve / Langfuse), never LangChain's cloud
+(`LANGSMITH_OTEL_ONLY=true` is forced):
 
 ```bash
 pip install "crucible[otel]"
 export CRUCIBLE_OTEL=1
-export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318   # your collector
-crucible run --repo <path>
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 ```
 
-LangChain/LangGraph then emit spans (model calls, tool loop, tokens, latency)
-**only** to your OTLP collector — Jaeger, Tempo, SigNoz, OpenObserve, Langfuse —
-never to LangChain's cloud (`LANGSMITH_OTEL_ONLY=true` is forced). `run_id` is the
-trace/thread key.
+Set both to fan out to LangSmith *and* a collector. Put these in `.env`
+(gitignored, auto-loaded). Tracing off if neither is configured.
 
 ```bash
 # smoke test the whole substrate against a fixture
