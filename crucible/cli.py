@@ -86,7 +86,14 @@ def run(
         "token_spend": 0,
     }
     typer.echo(f"run_id={run_id}  commit={repo_commit[:12] or '(none)'}  language={language}")
-    graph.invoke(initial, config={"configurable": {"thread_id": run_id}})
+    try:
+        graph.invoke(initial, config={"configurable": {"thread_id": run_id}})
+    except NotImplementedError as e:
+        # Phase 1: pipeline nodes are still stubs. Everything up to the node
+        # boundary (config, registry, store, workspace, checkpointer) ran.
+        typer.secho(f"stopped at stub node: {e}", fg=typer.colors.YELLOW)
+        typer.echo(f"resume after implementing it with:  crucible run --repo {repo} --resume {run_id}")
+        raise typer.Exit(3)
 
 
 @app.command()
