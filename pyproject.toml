@@ -13,19 +13,27 @@ dependencies = [
     "sqlalchemy>=2.0",
     "pyyaml>=6.0",
     "typer>=0.12",
+    "tree-sitter>=0.21",
+    "tree-sitter-language-pack>=0.7",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.5"]
 # Extra model providers (Ollama is built in via langchain-ollama).
 providers = ["litellm>=1.40"]
-# Cross-repo reachability (Phase 3) and language detection.
-codeintel = ["tree-sitter>=0.21"]
+# Cross-repo reachability (Phase 3): Joern CPG bridge etc.
+codeintel = []
 # Traces to a collector instead of local stdout/file.
 otel = ["opentelemetry-sdk>=1.25"]
 
 [project.scripts]
 crucible = "crucible.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["crucible*"]
+
+[tool.setuptools.package-data]
+crucible = ["skills/**/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

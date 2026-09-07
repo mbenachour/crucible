@@ -11,12 +11,15 @@ from typing import TypedDict
 
 
 class HuntTask(TypedDict):
-    """One queued Hunt cell. attack_class + scope_hint only — no source text."""
+    """One queued Hunt cell (issue #5). attack_class + scope_hint only — no
+    source text. `chunk_type` and `seed_path` come from Recon R3."""
 
     task_id: str
     area: str
     attack_class: str
     scope_hint: str
+    chunk_type: str            # taint | risk | specialist | catch_all | threat_fallback
+    seed_path: str | None      # "file:line" or "file:line -> file:line"
     continuation_count: int
 
 

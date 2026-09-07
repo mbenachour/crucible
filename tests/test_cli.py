@@ -1,5 +1,6 @@
 """CLI smoke tests — everything up to the (still-stubbed) pipeline nodes."""
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -23,7 +24,7 @@ def test_status_no_rows(tmp_path):
     assert "no tool-usage rows" in r.output
 
 
-def test_run_reaches_stub_node_and_persists_run_row(tmp_path):
+def test_run_completes_recon_then_stops_at_hunt_stub(tmp_path):
     store = tmp_path / "findings.sqlite"
     r = runner.invoke(
         app,
@@ -36,24 +37,28 @@ def test_run_reaches_stub_node_and_persists_run_row(tmp_path):
             "--no-sandbox",
         ],
     )
-    # Substrate ran; graph dispatched; first stub node raised.
+    # Recon ran deterministically (R1/R2 model calls fail gracefully with no
+    # Ollama and are logged); the run stops at the next stub node, Hunt.
     assert r.exit_code == 3
-    assert "stopped at stub node: recon" in r.output
+    assert "stopped at stub node: hunt" in r.output
     assert "language=py" in r.output
 
-    # workspace initialised
     ws = tmp_path / "ws"
     assert (ws / ".git").is_dir()
-    for sub in ("coverage", "findings", "offload", "scratch"):
-        assert (ws / sub).is_dir()
 
-    # run row written with detected language, status 'running'
-    rows = list(
-        sqlite3.connect(store).execute("select primary_language, status from runs")
-    )
+    # Recon R0/R3 artifacts
+    seed = json.loads((ws / "recon" / "seed.json").read_text())
+    assert seed["primary_language"] == "python"
+    assert (ws / "architecture.md").is_file()
+    manifest = json.loads((ws / "recon" / "task_manifest.json").read_text())
+    assert manifest["count"] >= 1
+    classes = {c["attack_class"] for c in manifest["chunks"]}
+    assert "unsafe_deserialization" in classes           # the pickle entry point
+    assert not (classes & {"memory_oob_write", "use_after_free"})  # pruned for python
+
+    # run row + checkpoint
+    rows = list(sqlite3.connect(store).execute("select primary_language, status from runs"))
     assert rows == [("py", "running")]
-
-    # checkpointer wrote state (resume is possible)
     n = sqlite3.connect(tmp_path / "ckpt.sqlite").execute(
         "select count(*) from checkpoints"
     ).fetchone()[0]
