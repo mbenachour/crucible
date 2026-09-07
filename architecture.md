@@ -434,7 +434,15 @@ Hunters compile and execute untrusted, model-generated code. **This layer is not
 hand-rolled** (`specs.md` §10) — a provider adapter makes the backend swappable
 (E2B / Modal / self-hosted AerolVM across Docker, gVisor, Firecracker).
 
-### 9.1 Interface  · *protocol done, implementation external*
+The **dev backend is Docker** (`crucible/sandbox/docker.py`,
+`DockerSandboxProvider`) — shells out to the `docker` CLI, no SDK dependency.
+Smoke-tested end to end (create → exec → destroy) on Ubuntu 24.04 with
+`docker.io` 29.x: source mount is read-only, `/scratch` tmpfs is writable, root
+fs is read-only, and `--network none` blocks egress. Run needs the invoking user
+in the `docker` group (persistent) or `sg docker -c '<cmd>'` for the current
+login session.
+
+### 9.1 Interface  · *protocol done; Docker backend wired + smoke-tested*
 
 - **`SandboxProvider`** (`Protocol`): `create(task_id, repo_mount, limits) -> Sandbox`,
   `exec(cmd, timeout_s) -> ExecResult`, `destroy()`.
@@ -456,12 +464,15 @@ hand-rolled** (`specs.md` §10) — a provider adapter makes the backend swappab
   completion.
 - **Own the patch cadence** — pin policy is a security decision.
 
-### 9.3 `assert_boot_environment()`  · *stub*
+### 9.3 `assert_boot_environment()`  · *done (in `sandbox/docker.py`)*
 
-Detects the **nested-containerization trap**: if the harness runs inside Docker
-and the sandbox uses namespace isolation, it may need `seccomp=unconfined` /
-`apparmor=unconfined` or it fails silently at startup. Detect at boot, **fail
-loudly** with a clear message rather than degrading.
+Fails loudly if `docker` is missing from `PATH` or `docker info` fails (daemon
+down / socket not reachable). Then detects the **nested-containerization trap**:
+if the harness runs inside Docker (`/.dockerenv`) and the sandbox uses namespace
+isolation, it runs a `docker run` smoke test and, on failure, tells the operator
+to add `seccomp=unconfined` / `apparmor=unconfined` or pick a non-namespace
+backend rather than degrading silently. `cli.py run` calls it before building the
+provider unless `--no-sandbox` is passed.
 
 ### 9.4 Acceptance
 
@@ -718,7 +729,7 @@ Constants worth knowing: `hooks.MAX_CONTINUATIONS = 3`,
 | Tool-output offloading | done, tested |
 | Tool implementations (bash, grep, sandbox_exec, fork, wishlist) | stub |
 | Per-tool instrumentation | done |
-| Sandbox provider | protocol only — implementation external |
+| Sandbox provider | Docker backend wired + smoke-tested (create/exec/destroy, ro-mount, no-egress); escape-test suite still owed (§14.7) |
 | Domain store (all tables + DAO) | done |
 | Recon / Hunt / Validate-bug / Validate-reach / Report bodies | stub |
 | Prompts | 2 attack classes + 2 validators drafted |

@@ -59,8 +59,11 @@ class SandboxProvider(Protocol):
 
 
 def assert_boot_environment() -> None:
-    """Detect the nested-containerization trap and fail loudly (§10)."""
-    # TODO(phase1): check /proc/1/cgroup for docker/containerd; if nested and
-    # the configured backend uses namespace isolation, verify seccomp/apparmor
-    # profiles are unconfined or raise a clear RuntimeError.
-    raise NotImplementedError
+    """Detect the nested-containerization trap and fail loudly (§10).
+
+    Delegates to the configured backend. Only the Docker dev backend is wired
+    today; a managed/self-hosted provider would register its own check here.
+    """
+    from crucible.sandbox.docker import assert_boot_environment as _docker_boot
+
+    _docker_boot()

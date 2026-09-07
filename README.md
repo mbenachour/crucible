@@ -120,7 +120,8 @@ side effects (filesystem, stores, model calls, queue feedback).
 | `crucible/workspace/` | §7 layout + git-per-node | done |
 | `crucible/agents/tools.py` | §9.2 tools + universal offload wrapper | offload done, tools stub |
 | `crucible/agents/instrumentation.py` | §1.12 per-tool counters | done |
-| `crucible/sandbox/__init__.py` | §10 provider adapter + policy | protocol done, impl external |
+| `crucible/sandbox/__init__.py` | §10 provider adapter protocol + policy | done |
+| `crucible/sandbox/docker.py` | §10 Docker dev backend (`DockerSandboxProvider`) | wired + smoke-tested (create/exec/destroy, ro source mount, `--network none`); escape-test suite (§14.7) still owed |
 | `crucible/store/` | §3 SQLite domain store (findings/validations/wishlist/tool-usage) | done |
 | `crucible/skills/` | §7 prompt files with `version:` front-matter | 2 attack classes + 2 validators drafted |
 | `tests/fixtures/repos/` | §12 golden fixtures + `bugs.yaml` manifests | fixture-c / -py / -clean / -holdout seeded |
@@ -135,7 +136,11 @@ outlive and be queryable independently of any run.
 
 ### Prerequisites
 - Python ≥ 3.11
-- **Docker** running (the sandbox backend; skip with `--no-sandbox`)
+- **Docker** running (the sandbox backend; skip with `--no-sandbox`). The
+  invoking user must reach the daemon without `sudo` — add it to the `docker`
+  group (`sudo usermod -aG docker "$USER"`, then re-login), or prefix commands
+  with `sg docker -c '…'` for the current session. First run pulls
+  `python:3.12-slim-bookworm`.
 - An LLM provider — local **Ollama** (default) or **DeepSeek** (hosted)
 
 ### Install (development)
