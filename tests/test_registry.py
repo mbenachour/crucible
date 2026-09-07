@@ -46,6 +46,41 @@ def test_reserved_provider_raises_on_chat_model():
         reg.chat_model(ModelRole.RECON)
 
 
+def test_deepseek_provider_builds_chat_model():
+    eps = _endpoints()
+    eps[ModelRole.HUNTER] = ModelEndpoint(
+        role=ModelRole.HUNTER, model="deepseek-chat",
+        provider=Provider.DEEPSEEK, api_key="sk-test", num_predict=2048,
+    )
+    reg = ModelRegistry(eps)
+    m = reg.chat_model(ModelRole.HUNTER)
+    assert type(m).__name__ == "ChatDeepSeek"
+    assert "deepseek.com" in (getattr(m, "api_base", "") or "")
+    assert reg.sampling_params(ModelRole.HUNTER)["provider"] == "deepseek"
+    assert reg.sampling_params(ModelRole.HUNTER)["base_url"] == "https://api.deepseek.com"
+
+
+def test_deepseek_missing_api_key_raises(monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    eps = _endpoints()
+    eps[ModelRole.HUNTER] = ModelEndpoint(
+        role=ModelRole.HUNTER, model="deepseek-chat", provider=Provider.DEEPSEEK
+    )
+    reg = ModelRegistry(eps)
+    with pytest.raises(RuntimeError, match="needs an API key"):
+        reg.chat_model(ModelRole.HUNTER)
+
+
+def test_deepseek_api_key_from_env(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-env")
+    eps = _endpoints()
+    eps[ModelRole.VALIDATOR_REACH] = ModelEndpoint(
+        role=ModelRole.VALIDATOR_REACH, model="deepseek-reasoner", provider=Provider.DEEPSEEK
+    )
+    reg = ModelRegistry(eps)
+    assert type(reg.chat_model(ModelRole.VALIDATOR_REACH)).__name__ == "ChatDeepSeek"
+
+
 def test_default_config_registry_builds():
     from crucible.config import load_registry
 

@@ -299,17 +299,27 @@ deny-list hits (empty = accepted):
 ### 6.1 `registry.py` — model routing + the core assertion  · *done*
 
 - **`ModelRole`** enum: `RECON`, `HUNTER`, `VALIDATOR_BUG`, `VALIDATOR_REACH`.
-- **`ModelEndpoint`** dataclass (frozen): `role`, `model` (LiteLLM string pointing
-  at self-hosted vLLM), `api_base`, `temperature`, `top_p`, `max_tokens`,
-  `extra`. `extra` is provider-specific and recorded verbatim on every finding.
+- **`Provider`** enum: `ollama` (local, `langchain-ollama`) and `deepseek`
+  (hosted, OpenAI-compatible, `langchain-deepseek`) are **wired**; `vllm` /
+  `openai_compat` are reserved and raise from `chat_model` until built.
+- **`ModelEndpoint`** dataclass (frozen): `role`, `model` (provider-native name —
+  an Ollama tag or `deepseek-chat`), `provider`, `base_url` (`""` → the
+  provider's default), `api_key` (optional; falls back to `DEEPSEEK_API_KEY`),
+  `temperature`, `top_p`, `num_ctx` (ollama), `num_predict` (→ `max_tokens` for
+  OpenAI-compatible providers), `seed`, `extra`.
 - **`ModelRegistry`**:
-  - Constructor runs `_assert_hunter_ne_validator()` — **fails loudly at startup
-    if `HUNTER.model == VALIDATOR_BUG.model`** (`specs.md` §6, §14.3). This is the
-    primary noise-control mechanism: a second model with different weights and
-    training data is an adversarial third party, not a model grading its own
-    homework.
-  - `get(role)`, `sampling_params(role)` (flattened dict recorded on findings).
-  - `from_env()` reads `HARNESS_MODEL_<ROLE>` / `HARNESS_APIBASE_<ROLE>`.
+  - Constructor runs `_assert_hunter_ne_validator()` — **fails loudly if
+    `(HUNTER.provider, HUNTER.model) == (VALIDATOR_BUG.provider, …)`**
+    (`specs.md` §6, §14.3). The primary noise-control mechanism: a second model
+    with different weights and training data is an adversarial third party, not a
+    model grading its own homework.
+  - `endpoint(role)`, `sampling_params(role)` (flattened dict recorded on
+    findings, no `api_key`), `chat_model(role)` → a LangChain `BaseChatModel`
+    (`ChatOllama` / `ChatDeepSeek`), cached per role.
+  - `from_env()` layers `CRUCIBLE_PROVIDER_<ROLE>` / `CRUCIBLE_MODEL_<ROLE>` /
+    `CRUCIBLE_API_KEY_<ROLE>` / `CRUCIBLE_{OLLAMA,DEEPSEEK}_BASE_URL` over
+    `crucible/config.py` `DEFAULT_ENDPOINTS`; `crucible.toml` `[models.<role>]`
+    sits in between.
 - Design stance: **providers are interchangeable commodities.** They change
   temperature, caching, and inference-effort budgets over time — build to absorb
   that volatility.
@@ -622,8 +632,10 @@ exceeded 14) — per-PR needs a separate, cheaper, smaller harness.
 
 | Variable | Used by | Meaning |
 |---|---|---|
-| `HARNESS_MODEL_<ROLE>` | `registry.from_env` | LiteLLM model string per role (`RECON`, `HUNTER`, `VALIDATOR_BUG`, `VALIDATOR_REACH`) |
-| `HARNESS_APIBASE_<ROLE>` | `registry.from_env` | vLLM endpoint per role |
+| `CRUCIBLE_PROVIDER_<ROLE>` | `registry.from_env` | `ollama` \| `deepseek` per role (`RECON`, `HUNTER`, `VALIDATOR_BUG`, `VALIDATOR_REACH`) |
+| `CRUCIBLE_MODEL_<ROLE>` | `registry.from_env` | provider-native model name per role |
+| `CRUCIBLE_API_KEY_<ROLE>` | `registry.from_env` | per-role key (else `DEEPSEEK_API_KEY`) |
+| `CRUCIBLE_OLLAMA_BASE_URL` / `CRUCIBLE_DEEPSEEK_BASE_URL` | `registry.from_env` | base URL for all roles on that provider |
 | `--checkpoint-db` | `cli run` | `SqliteSaver` path (execution state) |
 | `--store-url` | `cli status` | SQLAlchemy URL for `findings.sqlite` (domain state) |
 | `--workspace` | `cli run` | agent-writable working tree (default `.crucible-workspace`) |

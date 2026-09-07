@@ -5,12 +5,20 @@ Resolution order (lowest to highest precedence):
   2. a TOML file (``crucible.toml`` or ``--config PATH``), ``[models.<role>]`` tables
   3. environment variables (see `ModelRegistry.from_env`)
 
-Ollama is the only wired provider. The default models are chosen so that
-HUNTER and VALIDATOR_BUG are **different lineages** (the §6 assertion). You must
-pull them first, e.g.::
+Wired providers: ``ollama`` (local) and ``deepseek`` (hosted, OpenAI-compatible;
+needs ``DEEPSEEK_API_KEY`` or ``[models.<role>] api_key``). The default models
+are Ollama and chosen so that HUNTER and VALIDATOR_BUG are **different lineages**
+(the §6 assertion). Pull them first, e.g.::
 
     ollama pull qwen2.5-coder:7b
     ollama pull llama3.1:8b
+
+Example ``crucible.toml`` putting DeepSeek in the Hunter slot::
+
+    [models.hunter]
+    provider = "deepseek"
+    model = "deepseek-chat"
+    # api_key via DEEPSEEK_API_KEY env
 """
 
 from __future__ import annotations
@@ -63,6 +71,7 @@ def _apply_toml(endpoints: dict[ModelRole, ModelEndpoint], path: Path) -> dict[M
             model=tbl.get("model", cur.model),
             provider=Provider(tbl.get("provider", cur.provider.value)),
             base_url=tbl.get("base_url", cur.base_url),
+            api_key=tbl.get("api_key", cur.api_key),
             temperature=float(tbl.get("temperature", cur.temperature)),
             top_p=float(tbl.get("top_p", cur.top_p)),
             num_ctx=int(tbl.get("num_ctx", cur.num_ctx)),

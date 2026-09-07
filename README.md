@@ -139,6 +139,18 @@ crucible status <run_id>                                # fork rate + per-tool c
 pytest                                                 # deterministic units pass today
 ```
 
+**Models.** Provider-configurable via `crucible/llm/registry.py` — wired:
+`ollama` (local, default) and `deepseek` (hosted, OpenAI-compatible). Defaults
+use Ollama with different lineages for hunter vs validator (the §6 assertion):
+
+```bash
+ollama serve && ollama pull qwen2.5-coder:7b && ollama pull llama3.1:8b
+```
+
+Override per role in `crucible.toml` (`[models.hunter] provider="deepseek"
+model="deepseek-chat"`, key via `DEEPSEEK_API_KEY`) or env
+(`CRUCIBLE_PROVIDER_HUNTER`, `CRUCIBLE_MODEL_HUNTER`, `CRUCIBLE_API_KEY_HUNTER`).
+
 ## What Phase 1 "done" needs (specs.md §14)
 
 1. `crucible run --repo .../fixture-py` completes and emits a report

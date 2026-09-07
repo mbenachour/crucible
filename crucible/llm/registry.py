@@ -32,31 +32,46 @@ class ModelRole(str, Enum):
 
 
 class Provider(str, Enum):
-    OLLAMA = "ollama"
+    OLLAMA = "ollama"        # local, via langchain-ollama
+    DEEPSEEK = "deepseek"    # hosted, OpenAI-compatible, via langchain-deepseek
     # Reserved — not wired yet. Config may name them; `chat_model` will raise.
     VLLM = "vllm"
     OPENAI_COMPAT = "openai_compat"
 
 
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+
+# per-provider env var holding the API key (checked at chat_model() time)
+_PROVIDER_API_KEY_ENV = {Provider.DEEPSEEK: "DEEPSEEK_API_KEY"}
+_PROVIDER_DEFAULT_BASE_URL = {
+    Provider.OLLAMA: DEFAULT_OLLAMA_BASE_URL,
+    Provider.DEEPSEEK: DEFAULT_DEEPSEEK_BASE_URL,
+}
 
 
 @dataclass(frozen=True)
 class ModelEndpoint:
     """A role's model binding. `model` is the provider-native model name
-    (e.g. an Ollama tag like ``qwen2.5-coder:7b``)."""
+    (an Ollama tag like ``qwen2.5-coder:7b``, or ``deepseek-chat`` /
+    ``deepseek-reasoner``)."""
 
     role: ModelRole
     model: str
     provider: Provider = Provider.OLLAMA
-    base_url: str = DEFAULT_OLLAMA_BASE_URL
+    # "" -> use the provider's default (localhost for ollama, api.deepseek.com).
+    base_url: str = ""
+    api_key: str | None = None      # falls back to the provider's API-key env var
     temperature: float = 0.2
     top_p: float = 0.95
-    num_ctx: int = 8192
-    num_predict: int = 4096
+    num_ctx: int = 8192             # ollama only
+    num_predict: int = 4096         # -> max_tokens for OpenAI-compatible providers
     seed: int | None = None
     # Provider-specific knobs, passed through and recorded verbatim on findings.
     extra: Mapping[str, Any] = field(default_factory=dict)
+
+    def resolved_base_url(self) -> str:
+        return self.base_url or _PROVIDER_DEFAULT_BASE_URL.get(self.provider, "")
 
 
 class ModelRegistry:
@@ -87,7 +102,7 @@ class ModelRegistry:
         return {
             "provider": e.provider.value,
             "model": e.model,
-            "base_url": e.base_url,
+            "base_url": e.resolved_base_url(),
             "temperature": e.temperature,
             "top_p": e.top_p,
             "num_ctx": e.num_ctx,
@@ -95,6 +110,18 @@ class ModelRegistry:
             "seed": e.seed,
             **dict(e.extra),
         }
+
+    def _api_key(self, e: ModelEndpoint) -> str:
+        if e.api_key:
+            return e.api_key
+        env = _PROVIDER_API_KEY_ENV.get(e.provider)
+        key = os.environ.get(env, "") if env else ""
+        if not key:
+            raise RuntimeError(
+                f"{e.provider.value} needs an API key: set ModelEndpoint.api_key "
+                f"or the {env} environment variable."
+            )
+        return key
 
     def chat_model(self, role: ModelRole) -> BaseChatModel:
         if role in self._cache:
@@ -105,7 +132,7 @@ class ModelRegistry:
 
             model = ChatOllama(
                 model=e.model,
-                base_url=e.base_url,
+                base_url=e.resolved_base_url(),
                 temperature=e.temperature,
                 top_p=e.top_p,
                 num_ctx=e.num_ctx,
@@ -115,9 +142,22 @@ class ModelRegistry:
                 validate_model_on_init=False,  # fail at call time, not import time
                 **dict(e.extra),
             )
+        elif e.provider is Provider.DEEPSEEK:
+            from langchain_deepseek import ChatDeepSeek
+
+            model = ChatDeepSeek(
+                model=e.model,
+                api_base=e.resolved_base_url(),
+                api_key=self._api_key(e),
+                temperature=e.temperature,
+                top_p=e.top_p,
+                max_tokens=e.num_predict,   # OpenAI-compatible knob
+                **dict(e.extra),
+            )
         else:
             raise NotImplementedError(
-                f"provider {e.provider.value!r} is reserved but not wired; use 'ollama'"
+                f"provider {e.provider.value!r} is reserved but not wired; "
+                "use 'ollama' or 'deepseek'"
             )
         self._cache[role] = model
         return model
@@ -131,15 +171,18 @@ class ModelRegistry:
     def from_env(cls, defaults: dict[ModelRole, ModelEndpoint] | None = None) -> "ModelRegistry":
         """Build from `defaults`, then apply env overrides:
 
-        - ``CRUCIBLE_PROVIDER_<ROLE>``      e.g. ``ollama``
-        - ``CRUCIBLE_MODEL_<ROLE>``         e.g. ``llama3.1:8b``
+        - ``CRUCIBLE_PROVIDER_<ROLE>``      ``ollama`` | ``deepseek``
+        - ``CRUCIBLE_MODEL_<ROLE>``         e.g. ``llama3.1:8b`` / ``deepseek-chat``
         - ``CRUCIBLE_TEMPERATURE_<ROLE>``
+        - ``CRUCIBLE_API_KEY_<ROLE>``       per-role key (else the provider env var)
         - ``CRUCIBLE_OLLAMA_BASE_URL``      applies to every ollama role
+        - ``CRUCIBLE_DEEPSEEK_BASE_URL``    applies to every deepseek role
         """
         from crucible.config import DEFAULT_ENDPOINTS  # local import: avoid cycle
 
         base = dict(defaults or DEFAULT_ENDPOINTS)
         ollama_base = os.environ.get("CRUCIBLE_OLLAMA_BASE_URL")
+        deepseek_base = os.environ.get("CRUCIBLE_DEEPSEEK_BASE_URL")
         out: dict[ModelRole, ModelEndpoint] = {}
         for role, ep in base.items():
             r = role.value.upper()
@@ -149,11 +192,14 @@ class ModelRegistry:
             base_url = ep.base_url
             if provider is Provider.OLLAMA and ollama_base:
                 base_url = ollama_base
+            elif provider is Provider.DEEPSEEK and deepseek_base:
+                base_url = deepseek_base
             out[role] = ModelEndpoint(
                 role=role,
                 model=model,
                 provider=provider,
                 base_url=base_url,
+                api_key=os.environ.get(f"CRUCIBLE_API_KEY_{r}", ep.api_key),
                 temperature=float(temp) if temp is not None else ep.temperature,
                 top_p=ep.top_p,
                 num_ctx=ep.num_ctx,
