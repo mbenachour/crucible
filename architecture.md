@@ -645,7 +645,8 @@ exceeded 14) — per-PR needs a separate, cheaper, smaller harness.
 |---|---|---|
 | `<ROLE>_LLM` | `registry.from_env` | short provider alias, e.g. `RECON_LLM=deepseek` (`ollama` \| `deepseek` \| `openai`*); `CRUCIBLE_PROVIDER_<ROLE>` overrides it |
 | `CRUCIBLE_PROVIDER_<ROLE>` | `registry.from_env` | provider per role (`RECON`, `HUNTER`, `VALIDATOR_BUG`, `VALIDATOR_REACH`) |
-| `CRUCIBLE_MODEL_<ROLE>` | `registry.from_env` | provider-native model name per role |
+| `CRUCIBLE_MODEL_<ROLE>` | `registry.from_env` | per-role model name (wins over `DEEPSEEK_MODEL`) |
+| `DEEPSEEK_MODEL` | `registry.from_env` | default model for any deepseek role (default `deepseek-v4-flash`) |
 | `CRUCIBLE_API_KEY_<ROLE>` | `registry.from_env` | per-role key (else `DEEPSEEK_API_KEY`) |
 | `CRUCIBLE_OLLAMA_BASE_URL` / `CRUCIBLE_DEEPSEEK_BASE_URL` | `registry.from_env` | base URL for all roles on that provider |
 | `--checkpoint-db` | `cli run` | `SqliteSaver` path (execution state) |

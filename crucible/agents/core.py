@@ -26,6 +26,8 @@ from langchain.agents.middleware import (
     ModelCallLimitMiddleware,
     SummarizationMiddleware,
 )
+from langchain.agents.structured_output import ToolStrategy
+from pydantic import BaseModel
 
 from crucible.agents.middleware import (
     ClassificationMiddleware,
@@ -71,10 +73,18 @@ def build_agent(
         ModelCallLimitMiddleware(run_limit=model_call_limit, exit_behavior="end")
     )
 
+    # Portable structured output: a bare Pydantic schema is coerced to
+    # ToolStrategy (structured output via a tool call). The provider-native
+    # `response_format` JSON-schema path is rejected by some OpenAI-compatible
+    # backends (e.g. DeepSeek: "This response_format type is unavailable now").
+    rf = response_format
+    if isinstance(rf, type) and issubclass(rf, BaseModel):
+        rf = ToolStrategy(rf)
+
     return create_agent(
         model,
         tools=list(tools),
         system_prompt=system_prompt,
         middleware=middleware,
-        response_format=response_format,
+        response_format=rf,
     )

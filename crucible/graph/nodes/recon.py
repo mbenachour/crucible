@@ -27,7 +27,9 @@ from crucible.recon.seed import build_seed
 from crucible.workspace.fs import commit_node
 
 RECON_SUBAGENTS = 3
-RECON_RECURSION_LIMIT = 40
+# Keep above 2x the model-call limit so ModelCallLimitMiddleware's graceful
+# stop wins over a hard GraphRecursionError.
+RECON_RECURSION_LIMIT = 150
 
 
 def run(state: CrucibleState, deps=None) -> CrucibleState:

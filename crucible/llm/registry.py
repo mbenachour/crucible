@@ -52,9 +52,13 @@ class Provider(str, Enum):
 
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash"
 
 # per-provider env var holding the API key (checked at chat_model() time)
 _PROVIDER_API_KEY_ENV = {Provider.DEEPSEEK: "DEEPSEEK_API_KEY"}
+# per-provider env var holding the default model name
+_PROVIDER_MODEL_ENV = {Provider.DEEPSEEK: "DEEPSEEK_MODEL"}
+_PROVIDER_DEFAULT_MODEL = {Provider.DEEPSEEK: DEFAULT_DEEPSEEK_MODEL}
 _PROVIDER_DEFAULT_BASE_URL = {
     Provider.OLLAMA: DEFAULT_OLLAMA_BASE_URL,
     Provider.DEEPSEEK: DEFAULT_DEEPSEEK_BASE_URL,
@@ -156,15 +160,20 @@ class ModelRegistry:
         elif e.provider is Provider.DEEPSEEK:
             from langchain_deepseek import ChatDeepSeek
 
-            model = ChatDeepSeek(
-                model=e.model,
-                api_base=e.resolved_base_url(),
-                api_key=self._api_key(e),
-                temperature=e.temperature,
-                top_p=e.top_p,
-                max_tokens=e.num_predict,   # OpenAI-compatible knob
-                **dict(e.extra),
-            )
+            ds_kwargs: dict = {
+                "model": e.model,
+                "api_base": e.resolved_base_url(),
+                "api_key": self._api_key(e),
+                "temperature": e.temperature,
+                "top_p": e.top_p,
+                "max_tokens": e.num_predict,   # OpenAI-compatible knob
+                # v4 models default to "thinking mode", which rejects forced
+                # tool_choice (our structured-output path). Disable it unless
+                # the caller overrides via `extra`.
+                "extra_body": {"thinking": {"type": "disabled"}},
+            }
+            ds_kwargs.update(dict(e.extra))
+            model = ChatDeepSeek(**ds_kwargs)
         else:
             raise NotImplementedError(
                 f"provider {e.provider.value!r} is reserved but not wired; "
@@ -184,7 +193,8 @@ class ModelRegistry:
 
         - ``<ROLE>_LLM``                   friendly provider alias, e.g. ``RECON_LLM=deepseek``
         - ``CRUCIBLE_PROVIDER_<ROLE>``      provider (wins over ``<ROLE>_LLM``)
-        - ``CRUCIBLE_MODEL_<ROLE>``         e.g. ``llama3.1:8b`` / ``deepseek-chat``
+        - ``CRUCIBLE_MODEL_<ROLE>``         per-role model (wins over ``DEEPSEEK_MODEL``)
+        - ``DEEPSEEK_MODEL``               default model for any deepseek role
         - ``CRUCIBLE_TEMPERATURE_<ROLE>``
         - ``CRUCIBLE_API_KEY_<ROLE>``       per-role key (else the provider env var)
         - ``CRUCIBLE_OLLAMA_BASE_URL``      applies to every ollama role
@@ -205,7 +215,21 @@ class ModelRegistry:
                 or os.environ.get(f"{r}_LLM")
                 or ep.provider.value
             )
-            model = os.environ.get(f"CRUCIBLE_MODEL_{r}", ep.model)
+            # model resolution:
+            #   CRUCIBLE_MODEL_<ROLE>  (per-role, explicit)   — highest
+            #   <PROVIDER>_MODEL env / built-in default        — when provider was
+            #     switched away from the config's, or set explicitly
+            #   ep.model                                       — keep config value
+            explicit_model = os.environ.get(f"CRUCIBLE_MODEL_{r}")
+            provider_model_env = os.environ.get(_PROVIDER_MODEL_ENV.get(provider, ""))
+            if explicit_model:
+                model = explicit_model
+            elif provider is not ep.provider:
+                model = provider_model_env or _PROVIDER_DEFAULT_MODEL.get(provider, ep.model)
+            elif provider_model_env:
+                model = provider_model_env
+            else:
+                model = ep.model
             temp = os.environ.get(f"CRUCIBLE_TEMPERATURE_{r}")
             base_url = ep.base_url
             if provider is Provider.OLLAMA and ollama_base:
