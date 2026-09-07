@@ -1,5 +1,0 @@
-# fixture-clean: structurally similar to the bug fixtures, NO planted bugs
-# (specs.md §12). Any upheld finding here is a false positive; target is 0.
-fixture: fixture-clean
-primary_language: py
-bugs: []

@@ -15,3 +15,6 @@ findings.sqlite*
 *.egg-info/
 build/
 dist/
+
+# Entire test tree is intentionally untracked (per project decision).
+tests/
