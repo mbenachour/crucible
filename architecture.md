@@ -668,11 +668,27 @@ Constants worth knowing: `hooks.MAX_CONTINUATIONS = 3`,
   on `fixture-clean` (target 0); validation rejection rate (→ ~11%); high-integrity
   share (→ ~58%); fork rate per model; tool invocation counts; cost per actionable
   finding. Do **not** claim recall against real-world codebases.
-- **Observability** (`specs.md` §13) — every node emits role, model, prompt
-  version, token counts, latency, classification, cost, tool invocations. Default
-  OpenTelemetry → local storage; hosted observability is opt-in for internal dev
-  only (a data-residency product cannot send customer-code-derived traces to a
-  third party).
+- **Observability** (`specs.md` §13) — [`crucible/obs.py`](crucible/obs.py):
+  - **Logging** always on. `crucible run` calls `configure_logging(workspace)` →
+    console (INFO, `CRUCIBLE_LOG_LEVEL` to change) + `<workspace>/run.log`
+    (DEBUG). `crucible/graph/build.py` wraps every node so entry/exit/duration
+    are logged (`→ recon` / `✓ recon 34.4s` / `✗ hunt failed …`); Recon logs
+    per-phase counts and timings (R0/R1/R2/R3); `_log_error` mirrors every
+    `recon/errors.jsonl` line to the log.
+  - **Tracing** opt-in, **local-only**. Set `CRUCIBLE_OTEL=1` or
+    `OTEL_EXPORTER_OTLP_ENDPOINT` → `setup_tracing()` wires an OTLP
+    `TracerProvider` and sets `LANGSMITH_OTEL_ENABLED` + **`LANGSMITH_OTEL_ONLY=true`**
+    so LangChain/LangGraph emit spans **only** to your collector (Jaeger / Tempo /
+    SigNoz / OpenObserve / Langfuse), never to LangChain's cloud. `span()` is a
+    no-op when tracing is off. Needs the `otel` extra
+    (`pip install "crucible[otel]"`); missing → a warning, run continues.
+  - `run_id` is the LangGraph `thread_id`, so a resumed run's turns group into
+    one trace/thread.
+  - Per-tool counts still go to the SQLite `tool_usage` table
+    (`crucible/agents/instrumentation.py`) — queryable independently of any trace
+    backend.
+  - A data-residency product cannot send customer-code-derived traces to a third
+    party; that is why LangSmith cloud is never enabled by default.
 - **Health signals** — a hunt that finishes fast and spawns no sub-hunts/gap
   tasks usually means a crashed dependency, not clean code: flag and requeue. A
   run logging as successful with zero output is the signature of an unclassified

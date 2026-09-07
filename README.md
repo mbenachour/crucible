@@ -196,9 +196,29 @@ crucible run --repo <path-to-target-checkout>
 | `--resume <run_id>` | — | continue a run from its last checkpoint |
 | `--no-sandbox` | off | skip the Docker boot check (nodes needing exec will fail) |
 
-Phase 1 status: the pipeline nodes are still stubs, so a run exits at
-`stopped at stub node: recon` (code 3) after initialising the workspace, the run
-row, and the checkpoint. Everything up to the node boundary is real.
+Phase 1 status: Recon is implemented; Hunt/Validate/Report are stubs, so a run
+exits at `stopped at stub node: hunt` (code 3) after Recon writes its artifacts
+and checkpoints.
+
+### Logs & tracing
+
+Every run logs to the console and to `<workspace>/run.log` (DEBUG) — per-node
+entry/exit + durations, Recon phase counts, and every `recon/errors.jsonl` line.
+`CRUCIBLE_LOG_LEVEL=DEBUG` for more on the console.
+
+Distributed tracing is opt-in and **local-only**:
+
+```bash
+pip install "crucible[otel]"
+export CRUCIBLE_OTEL=1
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318   # your collector
+crucible run --repo <path>
+```
+
+LangChain/LangGraph then emit spans (model calls, tool loop, tokens, latency)
+**only** to your OTLP collector — Jaeger, Tempo, SigNoz, OpenObserve, Langfuse —
+never to LangChain's cloud (`LANGSMITH_OTEL_ONLY=true` is forced). `run_id` is the
+trace/thread key.
 
 ```bash
 # smoke test the whole substrate against a fixture

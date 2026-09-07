@@ -18,8 +18,9 @@ are closed over here and bound to each node with `functools.partial`.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
-from functools import partial
+import time
 from pathlib import Path
 
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -36,18 +37,40 @@ from crucible.graph.nodes import (
     report,
 )
 from crucible.graph.state import CrucibleState
+from crucible.obs import span
+
+_log = logging.getLogger("crucible.graph")
+
+
+def _traced(name: str, fn, deps: NodeDeps):
+    """Wrap a node so every entry/exit is logged and (if on) traced."""
+
+    def _node(state: CrucibleState) -> CrucibleState:
+        _log.info("→ %s", name)
+        t0 = time.monotonic()
+        try:
+            with span(f"node.{name}", node=name, run_id=state.get("run_id", "")):
+                out = fn(state, deps=deps)
+        except Exception as e:  # noqa: BLE001 — log then re-raise for the CLI
+            _log.warning("✗ %s failed after %.1fs: %s: %s", name, time.monotonic() - t0,
+                         type(e).__name__, e)
+            raise
+        _log.info("✓ %s  %.1fs", name, time.monotonic() - t0)
+        return out
+
+    return _node
 
 
 def build_graph(deps: NodeDeps, checkpoint_db: str | Path = "checkpoints.sqlite"):
     """Assemble the Phase 1 graph and bind the SQLite checkpointer + deps."""
     g = StateGraph(CrucibleState)
 
-    g.add_node("recon", partial(recon.run, deps=deps))
-    g.add_node("hunt", partial(hunt.run, deps=deps))
-    g.add_node("validate_mechanical", partial(validate_mechanical.run, deps=deps))
-    g.add_node("validate_bug", partial(validate_bug.run, deps=deps))
-    g.add_node("validate_reachability", partial(validate_reachability.run, deps=deps))
-    g.add_node("report", partial(report.run, deps=deps))
+    g.add_node("recon", _traced("recon", recon.run, deps))
+    g.add_node("hunt", _traced("hunt", hunt.run, deps))
+    g.add_node("validate_mechanical", _traced("validate_mechanical", validate_mechanical.run, deps))
+    g.add_node("validate_bug", _traced("validate_bug", validate_bug.run, deps))
+    g.add_node("validate_reachability", _traced("validate_reachability", validate_reachability.run, deps))
+    g.add_node("report", _traced("report", report.run, deps))
 
     g.add_edge(START, "recon")
     g.add_edge("recon", "hunt")

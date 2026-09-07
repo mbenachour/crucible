@@ -35,16 +35,24 @@ def run(
     no_sandbox: bool = typer.Option(False, "--no-sandbox", help="skip Docker sandbox boot check"),
 ) -> None:
     """Recon -> Hunt -> Validate -> Report, end to end (§14.1)."""
+    import time
+
     _load_dotenv()
     from crucible.config import load_registry
     from crucible.graph.build import build_graph
     from crucible.graph.deps import NodeDeps
+    from crucible.llm.registry import ModelRole
+    from crucible.obs import configure_logging, setup_tracing, span
     from crucible.repo import git_commit, primary_language
     from crucible.store.dao import Store
     from crucible.workspace.fs import init_workspace
 
     run_id = resume or uuid.uuid4().hex[:12]
     init_workspace(workspace)
+
+    log = configure_logging(workspace)
+    setup_tracing()  # opt-in via CRUCIBLE_OTEL / OTEL_EXPORTER_OTLP_ENDPOINT
+    started = time.monotonic()
 
     registry = load_registry(config or None)
     store = Store(store_url)
@@ -58,6 +66,14 @@ def run(
 
     repo_commit = git_commit(repo)
     language = primary_language(repo)
+    log.info(
+        "run %s %s  repo=%s  commit=%s  language=%s  sandbox=%s",
+        "resume" if resume else "start", run_id, repo, repo_commit[:12] or "(none)",
+        language, "off" if no_sandbox else "docker",
+    )
+    for role in ModelRole:
+        ep = registry.endpoint(role)
+        log.debug("model[%s] = %s:%s", role.value, ep.provider.value, ep.model)
 
     if not resume:
         store.create_run(run_id, str(repo), repo_commit, language)
@@ -87,13 +103,21 @@ def run(
     }
     typer.echo(f"run_id={run_id}  commit={repo_commit[:12] or '(none)'}  language={language}")
     try:
-        graph.invoke(initial, config={"configurable": {"thread_id": run_id}})
+        with span("crucible.run", run_id=run_id, repo=str(repo), language=language):
+            graph.invoke(initial, config={"configurable": {"thread_id": run_id}})
     except NotImplementedError as e:
         # Phase 1: pipeline nodes are still stubs. Everything up to the node
         # boundary (config, registry, store, workspace, checkpointer) ran.
+        elapsed = time.monotonic() - started
+        log.warning("run %s stopped at stub node after %.1fs: %s", run_id, elapsed, e)
         typer.secho(f"stopped at stub node: {e}", fg=typer.colors.YELLOW)
         typer.echo(f"resume after implementing it with:  crucible run --repo {repo} --resume {run_id}")
+        typer.echo(f"logs: {workspace}/run.log")
         raise typer.Exit(3)
+    except Exception:
+        log.exception("run %s failed after %.1fs", run_id, time.monotonic() - started)
+        raise
+    log.info("run %s complete in %.1fs", run_id, time.monotonic() - started)
 
 
 @app.command()

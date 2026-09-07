@@ -17,14 +17,18 @@ Artifacts written to the workspace:
 from __future__ import annotations
 
 import json
-import traceback
+import logging
+import time
 from pathlib import Path
 
 from crucible.graph.state import CrucibleState
+from crucible.obs import span
 from crucible.recon.decompose import decompose, render_architecture, task_cap
 from crucible.recon.schema import MapContribution, Seed, ThreatModel
 from crucible.recon.seed import build_seed
 from crucible.workspace.fs import commit_node
+
+log = logging.getLogger("crucible.recon")
 
 RECON_SUBAGENTS = 3
 # Keep above 2x the model-call limit so ModelCallLimitMiddleware's graceful
@@ -40,9 +44,19 @@ def run(state: CrucibleState, deps=None) -> CrucibleState:
     recon_dir.mkdir(parents=True, exist_ok=True)
     errors_path = recon_dir / "errors.jsonl"
 
+    log.info("recon start  repo=%s", repo)
+
     # ---- R0: deterministic seed -------------------------------------
-    seed = build_seed(repo)
-    (recon_dir / "seed.json").write_text(seed.model_dump_json(indent=2))
+    with span("recon.r0_seed"):
+        t0 = time.monotonic()
+        seed = build_seed(repo)
+        (recon_dir / "seed.json").write_text(seed.model_dump_json(indent=2))
+    log.info(
+        "R0 seed  %.1fs  kind=%s lang=%s files=%d entry_points=%d reflection=%d call_edges=%d",
+        time.monotonic() - t0, seed.repo_kind.value, seed.primary_language,
+        seed.stats.get("files", 0), seed.stats.get("entry_points", 0),
+        seed.stats.get("reflection_facts", 0), seed.stats.get("call_edges", 0),
+    )
 
     # ---- R1: map (model, fan-out over slices) ---------------------
     contributions: list[MapContribution] = []
@@ -50,19 +64,36 @@ def run(state: CrucibleState, deps=None) -> CrucibleState:
     registry = getattr(deps, "registry", None)
 
     if registry is not None:
-        contributions = _run_map(seed, repo, run_id, deps, errors_path)
+        with span("recon.r1_map"):
+            t0 = time.monotonic()
+            contributions = _run_map(seed, repo, run_id, deps, errors_path)
+        log.info("R1 map  %.1fs  %d/%d slices contributed",
+                 time.monotonic() - t0, len(contributions), RECON_SUBAGENTS)
+    else:
+        log.info("R1 map  skipped (no registry) — using the seed-only map")
     architecture_md = render_architecture(seed, contributions)
     (ws / "architecture.md").write_text(architecture_md)
 
     # ---- R2: threat model (model) --------------------------------
     if registry is not None:
-        threat_model = _run_threatmodel(seed, repo, architecture_md, run_id, deps, errors_path)
+        with span("recon.r2_threatmodel"):
+            t0 = time.monotonic()
+            threat_model = _run_threatmodel(seed, repo, architecture_md, run_id, deps, errors_path)
         if threat_model is not None:
             (recon_dir / "threat_model.json").write_text(threat_model.model_dump_json(indent=2))
+            log.info(
+                "R2 threat model  %.1fs  attackers=%d assets=%d stride=%d repo_specific=%d",
+                time.monotonic() - t0, len(threat_model.attackers), len(threat_model.assets),
+                len(threat_model.stride), len(threat_model.repo_specific_classes),
+            )
+        else:
+            log.warning("R2 threat model  %.1fs  failed — see recon/errors.jsonl",
+                        time.monotonic() - t0)
 
     # ---- R3: decompose (deterministic) --------------------------
     cap = task_cap(seed)
-    chunks = decompose(seed, threat_model, cap)
+    with span("recon.r3_decompose"):
+        chunks = decompose(seed, threat_model, cap)
     (recon_dir / "task_manifest.json").write_text(
         json.dumps(
             {"cap": cap, "count": len(chunks),
@@ -85,7 +116,14 @@ def run(state: CrucibleState, deps=None) -> CrucibleState:
         }
         for i, c in enumerate(chunks)
     ]
+    from collections import Counter
+
+    log.info(
+        "R3 decompose  %d/%d chunks queued  %s",
+        len(chunks), cap, dict(Counter(c.chunk_type.value for c in chunks)),
+    )
     commit_node(ws, "recon", run_id)
+    log.info("recon done  pending_hunts=%d", len(state["pending_hunts"]))
     return state
 
 
@@ -230,5 +268,6 @@ def _fmt_exc(e: Exception) -> str:
 
 
 def _log_error(path: Path, stage: str, unit: str, detail: str) -> None:
+    log.warning("%s[%s] failed: %s", stage, unit, detail[:300])
     with path.open("a") as fh:
         fh.write(json.dumps({"stage": stage, "unit": unit, "detail": detail[:2000]}) + "\n")

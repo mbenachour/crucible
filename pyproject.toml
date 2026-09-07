@@ -23,8 +23,11 @@ dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.5"]
 providers = ["litellm>=1.40"]
 # Cross-repo reachability (Phase 3): Joern CPG bridge etc.
 codeintel = []
-# Traces to a collector instead of local stdout/file.
-otel = ["opentelemetry-sdk>=1.25"]
+# Export LangChain/LangGraph traces to a local OTLP collector (specs §13).
+otel = [
+    "opentelemetry-sdk>=1.25",
+    "opentelemetry-exporter-otlp-proto-http>=1.25",
+]
 
 [project.scripts]
 crucible = "crucible.cli:app"
