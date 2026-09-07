@@ -123,7 +123,7 @@ side effects (filesystem, stores, model calls, queue feedback).
 | `crucible/sandbox/__init__.py` | §10 provider adapter protocol + policy | done |
 | `crucible/sandbox/docker.py` | §10 Docker dev backend (`DockerSandboxProvider`) | wired + smoke-tested (create/exec/destroy, ro source mount, `--network none`); escape-test suite (§14.7) still owed |
 | `crucible/store/` | §3 SQLite domain store (findings/validations/wishlist/tool-usage) | done |
-| `crucible/skills/` | §7 prompt files with `version:` front-matter | 2 attack classes + 2 validators drafted |
+| `crucible/skills/` | §7 prompt files with `version:` front-matter | 28 attack-class methodologies (full builtin taxonomy, issue #16) + 2 validators + 3 recon; fixture tuning owed (#3) |
 | `tests/fixtures/repos/` | §12 golden fixtures + `bugs.yaml` manifests | fixture-c / -py / -clean / -holdout seeded |
 
 ## Two stores, deliberately (§3)

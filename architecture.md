@@ -549,10 +549,15 @@ skills/
 body only for the scoped class. Loading the whole taxonomy upfront degrades
 performance before work begins.
 
-Drafted so far: `attack_classes/memory_oob_write.md`,
-`attack_classes/command_injection.md`, `validate/bug.md`,
-`validate/reachability.md`. Each methodology body has the same shape: attacker &
-boundary · where to look · move into execution · PoC shape · anti-patterns to
+**Attack-class library (issue #16): complete.** Every class the decomposer
+(`recon/decompose.py`) can queue has a methodology file — 28 in total, covering
+injection (web/CLI/lib), access control, C/C++ memory safety, parsing, library
+correctness, mobile, and IaC/config. `specialist` / `threat_fallback` chunks
+carrying a model-invented `repo_specific_class` have no file and fall back to
+the generic methodology plus the chunk `scope_hint`. `validate/bug.md` and
+`validate/reachability.md` cover the two validator passes. Each methodology body
+has the same shape: attacker &
+boundary · where to look · move into execution · PoC shape · output · anti-patterns to
 reject in your own output.
 
 ---
@@ -732,7 +737,7 @@ Constants worth knowing: `hooks.MAX_CONTINUATIONS = 3`,
 | Sandbox provider | Docker backend wired + smoke-tested (create/exec/destroy, ro-mount, no-egress); escape-test suite still owed (§14.7) |
 | Domain store (all tables + DAO) | done |
 | Recon / Hunt / Validate-bug / Validate-reach / Report bodies | stub |
-| Prompts | 2 attack classes + 2 validators drafted |
+| Prompts | 28 attack-class methodologies (full builtin taxonomy) + 2 validators + 3 recon; fixture tuning owed (#3) |
 | Golden fixtures + manifests | seeded |
 
 See [`README.md`](README.md) §"What Phase 1 'done' needs" for the acceptance
