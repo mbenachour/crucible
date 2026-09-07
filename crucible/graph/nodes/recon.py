@@ -32,6 +32,13 @@ from crucible.workspace.fs import commit_node
 log = logging.getLogger("crucible.recon")
 
 RECON_SUBAGENTS = 3
+# Phase-A exploration budget for each recon agent. deepseek-v4-flash will read
+# files until something stops it and (left to a ToolStrategy) almost never calls
+# the emit-tool on its own, so recon runs it in two phases: a plain ReAct agent
+# explores under this budget, then one forced `tool_choice=<schema>` call emits
+# the typed result (see `_explore` / `_emit`). The §8 hard cap
+# (MODEL_CALLS_PER_TASK) still bounds it; this lower value just keeps recon fast.
+RECON_EXPLORE_LIMIT = 16
 # Every agent loop iteration costs 4 LangGraph super-steps
 # (ModelCallLimitMiddleware.before_model → model → after_model → tools), not 2,
 # so the recursion limit must sit above 4x the model-call cap (plus a margin for
@@ -189,7 +196,6 @@ def _map_task_text(sl: dict, seed: Seed) -> str:
 
 
 def _run_map(seed: Seed, repo: str, run_id: str, deps, errors_path: Path) -> list[MapContribution]:
-    from crucible.agents.core import build_agent
     from crucible.agents.tools import read_only_fs_tools
     from crucible.llm.registry import ModelRole
     from crucible.skills import load_skill
@@ -197,29 +203,20 @@ def _run_map(seed: Seed, repo: str, run_id: str, deps, errors_path: Path) -> lis
     tools = read_only_fs_tools(repo)
     allowed = {t.name for t in tools}
     prompt = load_skill("recon/map.md")
+    model = deps.registry.chat_model(ModelRole.RECON)
     out: list[MapContribution] = []
 
     for sl in _slice_repo(seed, RECON_SUBAGENTS):
         try:
-            agent = build_agent(
-                role=ModelRole.RECON, registry=deps.registry, run_id=run_id,
-                tools=tools, system_prompt=prompt, allowed_tools=allowed,
-                store=getattr(deps, "store", None),
-                response_format=MapContribution, summarize=False,
+            task = _map_task_text(sl, seed)
+            msgs = _explore(
+                deps=deps, run_id=run_id,
+                thread_id=f"{run_id}:recon:map:{sl['name']}",
+                tools=tools, allowed=allowed, system_prompt=prompt, task_text=task,
             )
-            res = agent.invoke(
-                {"messages": [("user", _map_task_text(sl, seed))]},
-                config={
-                    "configurable": {"thread_id": f"{run_id}:recon:map:{sl['name']}"},
-                    "recursion_limit": RECON_RECURSION_LIMIT,
-                },
-            )
-            mc = res.get("structured_response")
-            if isinstance(mc, MapContribution):
-                mc.slice_name = sl["name"]
-                out.append(mc)
-            else:
-                _log_error(errors_path, "R1", sl["name"], "no structured_response")
+            mc = _emit(model, prompt, task, _digest(msgs), MapContribution)
+            mc.slice_name = sl["name"]
+            out.append(mc)
         except Exception as e:  # noqa: BLE001 — resilience: log and continue
             _log_error(errors_path, "R1", sl["name"], _fmt_exc(e))
     return out
@@ -238,34 +235,126 @@ def _threatmodel_task_text(seed: Seed, architecture_md: str) -> str:
 def _run_threatmodel(
     seed: Seed, repo: str, architecture_md: str, run_id: str, deps, errors_path: Path
 ) -> ThreatModel | None:
-    from crucible.agents.core import build_agent
     from crucible.agents.tools import read_only_fs_tools
     from crucible.llm.registry import ModelRole
     from crucible.skills import load_skill
 
     tools = read_only_fs_tools(repo)
+    allowed = {t.name for t in tools}
+    prompt = load_skill("recon/threatmodel.md")
+    model = deps.registry.chat_model(ModelRole.RECON)
     try:
-        agent = build_agent(
-            role=ModelRole.RECON, registry=deps.registry, run_id=run_id,
-            tools=tools, system_prompt=load_skill("recon/threatmodel.md"),
-            allowed_tools={t.name for t in tools},
-            store=getattr(deps, "store", None),
-            response_format=ThreatModel, summarize=False,
+        task = _threatmodel_task_text(seed, architecture_md)
+        msgs = _explore(
+            deps=deps, run_id=run_id, thread_id=f"{run_id}:recon:threatmodel",
+            tools=tools, allowed=allowed, system_prompt=prompt, task_text=task,
         )
-        res = agent.invoke(
-            {"messages": [("user", _threatmodel_task_text(seed, architecture_md))]},
-            config={
-                "configurable": {"thread_id": f"{run_id}:recon:threatmodel"},
-                "recursion_limit": RECON_RECURSION_LIMIT,
-            },
-        )
-        tm = res.get("structured_response")
-        if isinstance(tm, ThreatModel):
-            return tm
-        _log_error(errors_path, "R2", "threatmodel", "no structured_response")
+        return _emit(model, prompt, task, _digest(msgs), ThreatModel)
     except Exception as e:  # noqa: BLE001
         _log_error(errors_path, "R2", "threatmodel", _fmt_exc(e))
     return None
+
+
+# --- two-phase structured recon: explore, then force one typed emission -------
+# deepseek-v4-flash reads files reliably but (with a ToolStrategy in reach)
+# almost never calls the emit-tool before the call budget runs out, and
+# `create_agent` discards a plain-text answer — so R1/R2 came back empty
+# ("no structured_response"). The ToolStrategy retry path could also leave
+# sibling tool_calls unanswered and produce a malformed next request
+# ("insufficient tool messages following tool_calls message", HTTP 400).
+# Splitting the two removes both failure modes.
+
+
+def _explore(
+    *, deps, run_id: str, thread_id: str, tools, allowed: set[str],
+    system_prompt: str, task_text: str,
+) -> list:
+    """Phase A — bounded read-only exploration with a plain ReAct agent (no
+    structured-output tool in reach). Returns the message transcript."""
+    from crucible.agents.core import build_agent
+    from crucible.llm.registry import ModelRole
+
+    agent = build_agent(
+        role=ModelRole.RECON, registry=deps.registry, run_id=run_id,
+        tools=tools, system_prompt=system_prompt, allowed_tools=allowed,
+        store=getattr(deps, "store", None), response_format=None,
+        summarize=False, model_call_limit=RECON_EXPLORE_LIMIT,
+    )
+    explore_task = (
+        task_text
+        + "\n\nFirst, inspect the important files with the read-only tools "
+        "(list_dir, read_file, search). You will be asked for the structured "
+        "answer in a follow-up step — for now, gather facts and note what matters."
+    )
+    res = agent.invoke(
+        {"messages": [("user", explore_task)]},
+        config={
+            "configurable": {"thread_id": thread_id},
+            "recursion_limit": RECON_RECURSION_LIMIT,
+        },
+    )
+    return res.get("messages", [])
+
+
+def _digest(messages: list, *, budget: int = 20_000) -> str:
+    """Condense an exploration transcript to plain text — the tool outputs the
+    agent saw and any analysis it wrote, most-recent-first, capped."""
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    blocks: list[str] = []
+    for m in reversed(messages):
+        if isinstance(m, ToolMessage):
+            body = m.content if isinstance(m.content, str) else str(m.content)
+            label = getattr(m, "name", None) or "tool"
+        elif isinstance(m, AIMessage):
+            body = m.content if isinstance(m.content, str) else ""
+            label = "analysis"
+        else:
+            continue
+        body = (body or "").strip()
+        if not body:
+            continue
+        blocks.append(f"[{label}]\n{body[:4_000]}")
+        if sum(len(b) for b in blocks) > budget:
+            break
+    return "\n\n".join(reversed(blocks))[:budget]
+
+
+def _emit(model, system_prompt: str, task_text: str, digest: str, schema):
+    """Phase B — one forced structured emission from the gathered context. A
+    fresh message list (no tool-call history) keeps the request well-formed;
+    `tool_choice=<schema>` forces the single call we parse. One repair retry."""
+    from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+    from pydantic import ValidationError
+
+    name = schema.__name__
+    ask = (
+        f"{task_text}\n\n"
+        f"--- notes gathered while reading the repo ---\n{digest or '(no files read)'}\n\n"
+        f"Now call the `{name}` tool exactly once with your final answer, based on "
+        f"the notes above and the seed facts. Accurate partial content is fine."
+    )
+    bound = model.bind_tools([schema], tool_choice=name)
+    msgs: list = [SystemMessage(content=system_prompt), HumanMessage(content=ask)]
+    err = "model did not call the emit tool"
+    for _ in range(2):
+        out = bound.invoke(msgs)
+        calls = getattr(out, "tool_calls", None) or []
+        call = next((c for c in calls if c["name"] == name), calls[0] if calls else None)
+        if call is None:
+            break
+        try:
+            return schema.model_validate(call["args"])
+        except ValidationError as e:
+            err = str(e).splitlines()[0]
+            msgs = [
+                *msgs, out,
+                ToolMessage(
+                    content=f"That did not validate: {err}. Call `{name}` again with corrected fields.",
+                    tool_call_id=call.get("id", ""), name=name,
+                ),
+            ]
+    raise RuntimeError(f"structured emit failed: {err}")
 
 
 def _fmt_exc(e: Exception) -> str:
