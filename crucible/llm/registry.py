@@ -34,9 +34,20 @@ class ModelRole(str, Enum):
 class Provider(str, Enum):
     OLLAMA = "ollama"        # local, via langchain-ollama
     DEEPSEEK = "deepseek"    # hosted, OpenAI-compatible, via langchain-deepseek
-    # Reserved — not wired yet. Config may name them; `chat_model` will raise.
+    # Reserved — accepted in config/env but `chat_model` raises until wired.
+    OPENAI = "openai"
     VLLM = "vllm"
     OPENAI_COMPAT = "openai_compat"
+
+    @classmethod
+    def parse(cls, value: str) -> "Provider":
+        try:
+            return cls(value.strip().lower())
+        except ValueError:
+            raise ValueError(
+                f"unknown LLM provider {value!r}; expected one of "
+                f"{[p.value for p in cls]}"
+            ) from None
 
 
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
@@ -171,7 +182,8 @@ class ModelRegistry:
     def from_env(cls, defaults: dict[ModelRole, ModelEndpoint] | None = None) -> "ModelRegistry":
         """Build from `defaults`, then apply env overrides:
 
-        - ``CRUCIBLE_PROVIDER_<ROLE>``      ``ollama`` | ``deepseek``
+        - ``<ROLE>_LLM``                   friendly provider alias, e.g. ``RECON_LLM=deepseek``
+        - ``CRUCIBLE_PROVIDER_<ROLE>``      provider (wins over ``<ROLE>_LLM``)
         - ``CRUCIBLE_MODEL_<ROLE>``         e.g. ``llama3.1:8b`` / ``deepseek-chat``
         - ``CRUCIBLE_TEMPERATURE_<ROLE>``
         - ``CRUCIBLE_API_KEY_<ROLE>``       per-role key (else the provider env var)
@@ -186,7 +198,13 @@ class ModelRegistry:
         out: dict[ModelRole, ModelEndpoint] = {}
         for role, ep in base.items():
             r = role.value.upper()
-            provider = Provider(os.environ.get(f"CRUCIBLE_PROVIDER_{r}", ep.provider.value))
+            # `<ROLE>_LLM` (e.g. RECON_LLM=deepseek) is the friendly alias;
+            # `CRUCIBLE_PROVIDER_<ROLE>` wins if both are set.
+            provider = Provider.parse(
+                os.environ.get(f"CRUCIBLE_PROVIDER_{r}")
+                or os.environ.get(f"{r}_LLM")
+                or ep.provider.value
+            )
             model = os.environ.get(f"CRUCIBLE_MODEL_{r}", ep.model)
             temp = os.environ.get(f"CRUCIBLE_TEMPERATURE_{r}")
             base_url = ep.base_url

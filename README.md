@@ -169,14 +169,15 @@ model    = "deepseek-chat"       # api key via DEEPSEEK_API_KEY
 ```
 
 ```bash
-# or entirely by env
-export CRUCIBLE_PROVIDER_HUNTER=deepseek
+# or by env. `<ROLE>_LLM` is the short provider alias; CRUCIBLE_PROVIDER_<ROLE> wins.
+export RECON_LLM=ollama                      # ollama | deepseek | openai (openai reserved)
+export HUNTER_LLM=deepseek
 export CRUCIBLE_MODEL_HUNTER=deepseek-chat
 export CRUCIBLE_API_KEY_HUNTER=sk-...        # else DEEPSEEK_API_KEY
 ```
 
-Secrets: put `DEEPSEEK_API_KEY=sk-...` in a `.env` at the repo root (gitignored;
-loaded automatically by `crucible run` / `status`).
+Secrets and overrides: a `.env` at the repo root (gitignored; loaded automatically
+by `crucible run` / `status`) — e.g. `DEEPSEEK_API_KEY=sk-...`, `RECON_LLM=deepseek`.
 
 ### Run
 

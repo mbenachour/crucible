@@ -69,7 +69,7 @@ def _apply_toml(endpoints: dict[ModelRole, ModelEndpoint], path: Path) -> dict[M
         out[role] = ModelEndpoint(
             role=role,
             model=tbl.get("model", cur.model),
-            provider=Provider(tbl.get("provider", cur.provider.value)),
+            provider=Provider.parse(tbl.get("provider", cur.provider.value)),
             base_url=tbl.get("base_url", cur.base_url),
             api_key=tbl.get("api_key", cur.api_key),
             temperature=float(tbl.get("temperature", cur.temperature)),
