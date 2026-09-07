@@ -6,7 +6,7 @@ from crucible.recon.schema import EntryPointKind, RepoKind
 from crucible.recon.seed import build_seed
 
 REPOS = Path(__file__).parent / "fixtures" / "repos"
-RN = Path(__file__).parent / "ReactNativeSampleApp"
+RN = REPOS / "fixture-rn"
 
 
 def test_seed_is_deterministic():
