@@ -12,3 +12,6 @@ findings.sqlite*
 .ruff_cache/
 *.o
 *.a
+*.egg-info/
+build/
+dist/
