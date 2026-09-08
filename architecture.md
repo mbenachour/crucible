@@ -698,10 +698,14 @@ reject in your own output.
 
 Typer app, entry point `crucible`.
 
-- **`crucible run --repo <path> [--workspace ...] [--checkpoint-db ...] [--resume <run_id>]`**
+- **`crucible run --repo <path> [--workspace ...] [--checkpoint-db ...] [--resume <run_id>] [--stop-after <stage>]`**
   Initialises the workspace, builds the graph, and `invoke`s it with a fresh
   `CrucibleState`. `--resume` reuses a `run_id` so LangGraph reloads from the
-  checkpoint. (`repo_commit` / `primary_language` detection is TODO.)
+  checkpoint. `--stop-after <stage>` (a stage-node name — `recon`, `hunt`,
+  `dedup`, …, case-insensitive) halts the run cleanly once that node completes,
+  on the same exit path as a stub node (checkpoint written, exit 3); pass
+  `--resume <run_id>` to continue past it. (`repo_commit` / `primary_language`
+  detection is TODO.)
 - **`crucible status <run_id> [--store-url ...]`**
   Prints per-`(role, tool)` invocation counts and error counts from
   `tool_usage` (§14.10). Fork rate is derived from the `fork_sibling` row.

@@ -50,9 +50,39 @@ from crucible.obs import span
 
 _log = logging.getLogger("crucible.graph")
 
+# Canonical stage-node names, in topological order. Used by the CLI to validate
+# `--stop-after <stage>` and to render its help text.
+STAGE_NODES = (
+    "recon",
+    "hunt",
+    "dedup",
+    "validate_mechanical",
+    "gapfill",
+    "feedback",
+    "loop_control",
+    "validate_bug",
+    "validate_reachability",
+    "report",
+)
 
-def _traced(name: str, fn, deps: NodeDeps):
-    """Wrap a node so every entry/exit is logged and (if on) traced."""
+
+class StopAfterStage(Exception):
+    """A traced node raises this right after it completes successfully when it is
+    the ``--stop-after`` target. The CLI catches it and stops the run on the same
+    clean exit path as a stub node (checkpoint written, resume hint, exit 3)."""
+
+    def __init__(self, stage: str) -> None:
+        super().__init__(stage)
+        self.stage = stage
+
+
+def _traced(name: str, fn, deps: NodeDeps, stop_after: str | None = None):
+    """Wrap a node so every entry/exit is logged and (if on) traced.
+
+    When ``stop_after == name`` the wrapper raises :class:`StopAfterStage` after
+    the node body has run and logged its success — the run then unwinds through
+    the CLI's clean-stop handler and no further stages execute.
+    """
 
     def _node(state: CrucibleState) -> CrucibleState:
         _log.info("→ %s", name)
@@ -65,25 +95,36 @@ def _traced(name: str, fn, deps: NodeDeps):
                          type(e).__name__, e)
             raise
         _log.info("✓ %s  %.1fs", name, time.monotonic() - t0)
+        if stop_after and name == stop_after:
+            _log.info("stop-after: %s complete — halting run (--stop-after)", name)
+            raise StopAfterStage(name)
         return out
 
     return _node
 
 
-def build_graph(deps: NodeDeps, checkpoint_db: str | Path = "checkpoints.sqlite"):
-    """Assemble the Phase 1 graph and bind the SQLite checkpointer + deps."""
+def build_graph(
+    deps: NodeDeps,
+    checkpoint_db: str | Path = "checkpoints.sqlite",
+    stop_after: str | None = None,
+):
+    """Assemble the Phase 1 graph and bind the SQLite checkpointer + deps.
+
+    ``stop_after`` (one of :data:`STAGE_NODES`) makes the run halt cleanly once
+    that node has completed; ``None`` keeps the full end-to-end semantics.
+    """
     g = StateGraph(CrucibleState)
 
-    g.add_node("recon", _traced("recon", recon.run, deps))
-    g.add_node("hunt", _traced("hunt", hunt.run, deps))
-    g.add_node("dedup", _traced("dedup", dedup.run, deps))
-    g.add_node("validate_mechanical", _traced("validate_mechanical", validate_mechanical.run, deps))
-    g.add_node("gapfill", _traced("gapfill", gapfill.run, deps))
-    g.add_node("feedback", _traced("feedback", feedback.run, deps))
-    g.add_node("loop_control", _traced("loop_control", loop_control.run, deps))
-    g.add_node("validate_bug", _traced("validate_bug", validate_bug.run, deps))
-    g.add_node("validate_reachability", _traced("validate_reachability", validate_reachability.run, deps))
-    g.add_node("report", _traced("report", report.run, deps))
+    g.add_node("recon", _traced("recon", recon.run, deps, stop_after))
+    g.add_node("hunt", _traced("hunt", hunt.run, deps, stop_after))
+    g.add_node("dedup", _traced("dedup", dedup.run, deps, stop_after))
+    g.add_node("validate_mechanical", _traced("validate_mechanical", validate_mechanical.run, deps, stop_after))
+    g.add_node("gapfill", _traced("gapfill", gapfill.run, deps, stop_after))
+    g.add_node("feedback", _traced("feedback", feedback.run, deps, stop_after))
+    g.add_node("loop_control", _traced("loop_control", loop_control.run, deps, stop_after))
+    g.add_node("validate_bug", _traced("validate_bug", validate_bug.run, deps, stop_after))
+    g.add_node("validate_reachability", _traced("validate_reachability", validate_reachability.run, deps, stop_after))
+    g.add_node("report", _traced("report", report.run, deps, stop_after))
 
     g.add_edge(START, "recon")
     g.add_edge("recon", "hunt")

@@ -206,6 +206,7 @@ crucible run --repo <path-to-target-checkout>
 | `--store-url` | `sqlite:///findings.sqlite` | domain store (findings, validations, tool usage) |
 | `--config` | `crucible.toml` | model config file |
 | `--resume <run_id>` | — | continue a run from its last checkpoint |
+| `--stop-after <stage>` | — | stop cleanly after the named stage (`recon`, `hunt`, `dedup`, …) completes; resume with `--resume <run_id>` |
 | `--no-sandbox` | off | skip the Docker boot check (nodes needing exec will fail) |
 
 | Env | Default | Meaning |
