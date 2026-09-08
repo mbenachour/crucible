@@ -30,13 +30,12 @@ def check_finding(
     repo_path: str,
     repo_commit: str,
     workspace_path: str,
+    store=None,
 ) -> MechResult:
     """Run every deterministic gate; accumulate failure reasons."""
     reasons: list[str] = []
 
-    # TODO(phase1): load the Finding record from the store by finding_id.
-    finding = None  # store.dao.get_finding(finding_id)
-
+    finding = _load_finding(finding_id, store, workspace_path)
     if finding is None:
         return MechResult(finding_id, MechStatus.MECHANICAL_FAILED, ["finding not found"])
 
@@ -48,6 +47,32 @@ def check_finding(
 
     status = MechStatus.PASSED if not reasons else MechStatus.MECHANICAL_FAILED
     return MechResult(finding_id, status, reasons)
+
+
+def _load_finding(finding_id: str, store, workspace_path: str):
+    """Reconstruct the `Finding` from the store, falling back to the workspace
+    JSON the Hunter wrote (`findings/<id>.json`)."""
+    from crucible.validation.schema import Finding
+
+    payload = None
+    if store is not None:
+        row = store.get_finding(finding_id)
+        if row is not None:
+            payload = row.payload
+    if payload is None:
+        from crucible.workspace import layout
+
+        p = layout.finding_path(workspace_path, finding_id)
+        if p.is_file():
+            import json
+
+            payload = json.loads(p.read_text())
+    if not isinstance(payload, dict):
+        return None
+    try:
+        return Finding.model_validate(payload)
+    except Exception:  # noqa: BLE001 — a malformed payload is a mechanical failure
+        return None
 
 
 def _check_path_and_range(finding, repo_path: str) -> list[str]:
@@ -75,7 +100,7 @@ def _check_patch_applies(finding, repo_path: str, repo_commit: str) -> list[str]
     """Dry-run the unified diff against the unmodified tree, then revert."""
     proc = subprocess.run(
         ["git", "-C", repo_path, "apply", "--check", "-"],
-        input=finding.proposed_patch, text=True, capture_output=True,
+        input=finding.proposed_patch, text=True, capture_output=True, check=False,
     )
     if proc.returncode != 0:
         return [f"patch does not apply cleanly: {proc.stderr.strip()}"]
