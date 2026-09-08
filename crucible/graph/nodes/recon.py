@@ -21,7 +21,11 @@ import logging
 import time
 from pathlib import Path
 
-from crucible.config import MODEL_CALLS_PER_TASK
+from crucible.config import (
+    MODEL_CALLS_PER_TASK,
+    RECON_MAX_SUBAGENTS,
+    RECON_ORIENT_READ_BUDGET,
+)
 from crucible.graph.state import CrucibleState
 from crucible.obs import span
 from crucible.recon.decompose import (
@@ -30,14 +34,14 @@ from crucible.recon.decompose import (
     subsystem_rows,
     task_cap,
 )
-from crucible.recon.schema import Seed, SubsystemMap, ThreatModel
+from crucible.recon.orient import partition_subsystems
+from crucible.recon.schema import ModuleMap, Seed, SubsystemMap, ThreatModel
 from crucible.recon.seed import build_seed
 from crucible.recon.synthesize import derive_auth_model, rank_attack_surface
 from crucible.workspace.fs import commit_node
 
 log = logging.getLogger("crucible.recon")
 
-RECON_SUBAGENTS = 3
 # Phase-A exploration budget for each recon agent. deepseek-v4-flash will read
 # files until something stops it and (left to a ToolStrategy) almost never calls
 # the emit-tool on its own, so recon runs it in two phases: a plain ReAct agent
@@ -76,31 +80,48 @@ def run(state: CrucibleState, deps=None) -> CrucibleState:
         seed.stats.get("reflection_facts", 0), seed.stats.get("call_edges", 0),
     )
 
-    # ---- R1b: subsystem maps (model, fan-out over slices) --------
-    # Phase 1 keeps the mechanical `_slice_repo` partition (fixed N=3); Phase 2
-    # replaces it with the R1a lead-agent ModuleMap. The synthesis + doc render
-    # below already consume a generic `partition`, so swapping the source later
-    # is contained.
-    slices = _slice_repo(seed, RECON_SUBAGENTS)
-    partition = _slices_to_partition(slices)
-    subsystem_maps: list[SubsystemMap] = []
-    threat_model: ThreatModel | None = None
     registry = getattr(deps, "registry", None)
+    threat_model: ThreatModel | None = None
 
-    if registry is not None and slices:
-        with span("recon.r1_map"):
+    # ---- R1a: orient — lead agent's top-down read (ModuleMap) ----
+    module_map = None
+    if registry is not None:
+        with span("recon.r1a_orient"):
             t0 = time.monotonic()
-            subsystem_maps = _run_map(seed, repo, run_id, deps, errors_path, slices)
+            module_map = _run_orient(seed, repo, run_id, deps, errors_path)
+        if module_map is not None:
+            (recon_dir / "module_map.json").write_text(module_map.model_dump_json(indent=2))
+            log.info("R1a orient  %.1fs  %d subsystem(s) proposed", time.monotonic() - t0,
+                     len(module_map.subsystems))
+        else:
+            log.warning("R1a orient  %.1fs  failed — deterministic partition",
+                        time.monotonic() - t0)
+
+    partition = partition_subsystems(
+        seed, module_map, max_subagents=RECON_MAX_SUBAGENTS, repo_path=repo
+    )
+    _validate_coverage(seed, partition)
+    src_kind = (partition[0].get("source") if partition else None) or "fallback"
+    log.info("R1a partition  %d subsystem(s) via %s  %s", len(partition), src_kind,
+             ", ".join(f"{p['name']}({p['loc']})" for p in partition[:8]))
+
+    # ---- R1b: subsystem maps (model, fan-out per subsystem) -----
+    subsystem_maps: list[SubsystemMap] = []
+    if registry is not None and partition:
+        with span("recon.r1b_map"):
+            t0 = time.monotonic()
+            subsystem_maps = _run_map(seed, repo, run_id, deps, errors_path, partition)
         log.info("R1b subsystem maps  %.1fs  %d/%d subsystems contributed",
-                 time.monotonic() - t0, len(subsystem_maps), len(slices))
+                 time.monotonic() - t0, len(subsystem_maps), len(partition))
     else:
         log.info("R1b subsystem maps  skipped (no registry) — seed-only map")
 
     # ---- R1c: synthesis (deterministic) ------------------------
-    auth_model = derive_auth_model(seed, subsystem_maps, None)
+    auth_model = derive_auth_model(seed, subsystem_maps, module_map)
     # draft doc (no ranked surface / quality yet) — this is R2's input
     architecture_md = render_architecture(
-        seed, subsystem_maps, partition=partition, auth_model=auth_model
+        seed, subsystem_maps, partition=partition, module_map=module_map,
+        auth_model=auth_model,
     )
     (ws / "architecture.md").write_text(architecture_md)
 
@@ -121,13 +142,13 @@ def run(state: CrucibleState, deps=None) -> CrucibleState:
                         time.monotonic() - t0)
 
     # ---- R1c: finalise synthesis with the threat model ---------
-    quality = _recon_quality(registry, slices, subsystem_maps, threat_model)
+    quality = _recon_quality(registry, partition, subsystem_maps, threat_model)
     attack_surface = rank_attack_surface(
-        seed, subsystem_maps, None, threat_model, partition
+        seed, subsystem_maps, module_map, threat_model, partition
     )
     architecture_md = render_architecture(
-        seed, subsystem_maps, partition=partition, auth_model=auth_model,
-        attack_surface=attack_surface, quality=quality,
+        seed, subsystem_maps, partition=partition, module_map=module_map,
+        auth_model=auth_model, attack_surface=attack_surface, quality=quality,
     )
     (ws / "architecture.md").write_text(architecture_md)
     (recon_dir / "attack_surface.json").write_text(
@@ -182,34 +203,25 @@ def run(state: CrucibleState, deps=None) -> CrucibleState:
 # --------------------------------------------------------------------- helpers
 
 
-def _area(path: str) -> str:
-    parts = path.split("/")
-    return parts[0] if len(parts) > 1 else "."
-
-
-def _slice_repo(seed: Seed, n: int) -> list[dict]:
-    """Group source files by top-level area, pack areas into <= n LOC-balanced buckets."""
-    by_area: dict[str, list] = {}
-    for f in seed.files:
-        if f.role == "source":
-            by_area.setdefault(_area(f.path), []).append(f)
-    if not by_area:
-        return []
-    areas = sorted(by_area, key=lambda a: -sum(f.loc for f in by_area[a]))
-    k = max(1, min(n, len(areas)))
-    buckets: list[list[str]] = [[] for _ in range(k)]
-    load = [0] * k
-    for a in areas:
-        i = load.index(min(load))
-        buckets[i].append(a)
-        load[i] += sum(f.loc for f in by_area[a])
-    out = []
-    for b in buckets:
-        if not b:
-            continue
-        files = [f.path for a in b for f in by_area[a]]
-        out.append({"name": "+".join(b), "areas": b, "files": files})
-    return out
+def _validate_coverage(seed: Seed, partition: list[dict]) -> None:
+    """Hard check: every source file maps to exactly one subsystem. Raises so a
+    partitioner bug fails the run loudly rather than silently dropping code."""
+    src = {f.path for f in seed.files if f.role == "source"}
+    if not src:
+        return
+    assigned: dict[str, int] = {}
+    for p in partition:
+        for f in p["files"]:
+            assigned[f] = assigned.get(f, 0) + 1
+    missing = src - assigned.keys()
+    dup = {f for f, n in assigned.items() if n > 1}
+    extra = assigned.keys() - src
+    if missing or dup or extra:
+        raise RuntimeError(
+            f"partition coverage broken: {len(missing)} unassigned, "
+            f"{len(dup)} double-assigned, {len(extra)} unknown "
+            f"(e.g. missing={sorted(missing)[:3]} dup={sorted(dup)[:3]})"
+        )
 
 
 def _seed_eps_for(seed: Seed, files: set[str]) -> list[str]:
@@ -222,48 +234,99 @@ def _seed_eps_for(seed: Seed, files: set[str]) -> list[str]:
     ]
 
 
-def _map_task_text(sl: dict, seed: Seed) -> str:
-    files = "\n".join(f"- {p}" for p in sl["files"][:80])
-    eps = _seed_eps_for(seed, set(sl["files"]))
+def _map_task_text(sub: dict, siblings: list[dict], seed: Seed) -> str:
+    files = "\n".join(f"- {p}" for p in sub["files"][:80])
+    eps = _seed_eps_for(seed, set(sub["files"]))
     eps_txt = "\n".join(f"- {e}" for e in eps[:60]) or "(none found by the seed)"
+    sib_txt = "\n".join(
+        f"- {s['name']}: {s.get('responsibility') or '(no responsibility stated)'}"
+        for s in siblings if s["name"] != sub["name"]
+    ) or "(none — single subsystem)"
+    face = "external-facing" if sub.get("external_facing") else "internal"
     return (
         f"Repo kind: {seed.repo_kind.value}. Primary language: {seed.primary_language}. "
         f"Frameworks: {', '.join(seed.frameworks) or 'none'}.\n\n"
-        f"Slice '{sl['name']}' — files:\n{files}\n\n"
-        f"Seed entry points in this slice:\n{eps_txt}\n\n"
-        "Refine this into the structured map for this slice."
+        f"Subsystem '{sub['name']}' ({face}) — {sub.get('responsibility') or 'responsibility not stated'}\n"
+        f"Files:\n{files}\n\n"
+        f"Seed entry points in this subsystem:\n{eps_txt}\n\n"
+        f"Neighbouring subsystems (name cross-boundary flows against these):\n{sib_txt}\n\n"
+        "Refine this into the structured SubsystemMap. For data_flows, use "
+        "'A/x.py:10 -> B/y.py:88' form and name the neighbour when a flow leaves "
+        "this subsystem."
     )
 
 
-def _slices_to_partition(slices: list[dict]) -> list[dict]:
-    """Adapt `_slice_repo` output to the generic partition shape the synthesis
-    and doc render consume (Phase 2 produces the same shape from a ModuleMap)."""
-    return [
-        {
-            "name": sl["name"],
-            "responsibility": "",
-            "external_facing": False,
-            "paths": sl.get("areas", []),
-            "files": sl.get("files", []),
-            "depends_on": [],
-        }
-        for sl in slices
-    ]
-
-
-def _recon_quality(registry, slices, subsystem_maps, threat_model) -> str:
+def _recon_quality(registry, partition, subsystem_maps, threat_model) -> str:
     """full  = every subsystem contributed a map AND R2 succeeded
        partial = some maps, or R2 missing
        seed_only = no registry, or not one usable map."""
     if registry is None or not subsystem_maps:
         return "seed_only"
-    if len(subsystem_maps) >= len(slices) and threat_model is not None:
+    if len(subsystem_maps) >= len(partition) and threat_model is not None:
         return "full"
     return "partial"
 
 
+def _orient_task_text(seed: Seed, repo: str) -> str:
+    src = sorted(
+        ((f.path, f.loc) for f in seed.files if f.role == "source"),
+        key=lambda t: -t[1],
+    )
+    by_top: dict[str, int] = {}
+    for path, loc in src:
+        by_top[path.split("/")[0]] = by_top.get(path.split("/")[0], 0) + loc
+    tops = "\n".join(f"- {d}/  (~{loc} LOC)" for d, loc in
+                     sorted(by_top.items(), key=lambda t: -t[1])[:20])
+    manifests = sorted(
+        f.path for f in seed.files
+        if f.path.rsplit("/", 1)[-1] in {
+            "package.json", "pyproject.toml", "setup.py", "go.mod", "Cargo.toml",
+            "pom.xml", "build.gradle", "build.gradle.kts", "composer.json",
+        }
+    )
+    man_txt = "\n".join(f"- {m}" for m in manifests[:40]) or "(none)"
+    ep_files = sorted({ep.file for ep in seed.entry_points})
+    ep_txt = "\n".join(f"- {p}" for p in ep_files[:40]) or "(none found by the seed)"
+    codeowners = "yes" if any(
+        (Path(repo) / c).is_file() for c in ("CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS")
+    ) else "no"
+    return (
+        f"Repo kind: {seed.repo_kind.value}. Primary language: {seed.primary_language}. "
+        f"Frameworks: {', '.join(seed.frameworks) or 'none'}. CODEOWNERS present: {codeowners}.\n\n"
+        f"Top-level source areas by LOC:\n{tops}\n\n"
+        f"Package manifests:\n{man_txt}\n\n"
+        f"Files the seed flagged as entry points:\n{ep_txt}\n\n"
+        "Read top-down and emit the ModuleMap: 2-8 subsystems by responsibility, "
+        "each with paths[] covering the source tree, an external_facing flag, and "
+        "depends_on; plus repo-wide build/run/test and a one-paragraph auth model."
+    )
+
+
+def _run_orient(seed: Seed, repo: str, run_id: str, deps, errors_path: Path) -> ModuleMap | None:
+    from crucible.agents.tools import read_only_fs_tools
+    from crucible.llm.registry import ModelRole
+    from crucible.skills import load_skill
+
+    tools = read_only_fs_tools(repo)
+    allowed = {t.name for t in tools}
+    prompt = load_skill("recon/orient.md")
+    model = deps.registry.chat_model(ModelRole.RECON)
+    try:
+        task = _orient_task_text(seed, repo)
+        msgs = _explore(
+            deps=deps, run_id=run_id, thread_id=f"{run_id}:recon:orient",
+            tools=tools, allowed=allowed, system_prompt=prompt, task_text=task,
+            budget=RECON_ORIENT_READ_BUDGET,
+        )
+        mm = _emit(model, prompt, task, _digest(msgs), ModuleMap)
+        return mm if mm.subsystems else None
+    except Exception as e:  # noqa: BLE001 — resilience: deterministic fallback
+        _log_error(errors_path, "R1a", "orient", _fmt_exc(e))
+    return None
+
+
 def _run_map(
-    seed: Seed, repo: str, run_id: str, deps, errors_path: Path, slices: list[dict]
+    seed: Seed, repo: str, run_id: str, deps, errors_path: Path, partition: list[dict]
 ) -> list[SubsystemMap]:
     from crucible.agents.tools import read_only_fs_tools
     from crucible.llm.registry import ModelRole
@@ -275,19 +338,19 @@ def _run_map(
     model = deps.registry.chat_model(ModelRole.RECON)
     out: list[SubsystemMap] = []
 
-    for sl in slices:
+    for sub in partition:
         try:
-            task = _map_task_text(sl, seed)
+            task = _map_task_text(sub, partition, seed)
             msgs = _explore(
                 deps=deps, run_id=run_id,
-                thread_id=f"{run_id}:recon:map:{sl['name']}",
+                thread_id=f"{run_id}:recon:map:{sub['name']}",
                 tools=tools, allowed=allowed, system_prompt=prompt, task_text=task,
             )
             sm = _emit(model, prompt, task, _digest(msgs), SubsystemMap)
-            sm.subsystem = sl["name"]
+            sm.subsystem = sub["name"]
             out.append(sm)
         except Exception as e:  # noqa: BLE001 — resilience: log and continue
-            _log_error(errors_path, "R1", sl["name"], _fmt_exc(e))
+            _log_error(errors_path, "R1b", sub["name"], _fmt_exc(e))
     return out
 
 
@@ -336,7 +399,7 @@ def _run_threatmodel(
 
 def _explore(
     *, deps, run_id: str, thread_id: str, tools, allowed: set[str],
-    system_prompt: str, task_text: str,
+    system_prompt: str, task_text: str, budget: int = RECON_EXPLORE_LIMIT,
 ) -> list:
     """Phase A — bounded read-only exploration with a plain ReAct agent (no
     structured-output tool in reach). Returns the message transcript."""
@@ -347,7 +410,7 @@ def _explore(
         role=ModelRole.RECON, registry=deps.registry, run_id=run_id,
         tools=tools, system_prompt=system_prompt, allowed_tools=allowed,
         store=getattr(deps, "store", None), response_format=None,
-        summarize=False, model_call_limit=RECON_EXPLORE_LIMIT,
+        summarize=False, model_call_limit=budget,
     )
     explore_task = (
         task_text
