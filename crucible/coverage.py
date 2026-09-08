@@ -100,3 +100,37 @@ def manifest_task(chunk: dict, task_id: str, *, scope_prefix: str = "") -> dict:
 def cell_key(area: str, attack_class: str) -> str:
     """Canonical `"area::attack_class"` string — matches `state["completed_cells"]`."""
     return f"{area}::{attack_class}"
+
+
+# Mechanical-failure reasons that are the Hunter's fault (worth feeding back and
+# worth another Gapfill pass). "poc_gate not implemented" / "finding not found"
+# are harness gaps, not Hunter errors — they must never trigger a rewrite.
+_ACTIONABLE_MECH = (
+    "does not exist", "out of bounds", "does not apply", "not fully populated",
+    "tautology", "poc_test is empty", "corrupt patch",
+)
+
+
+def actionable_mechanical_failures(store, run_id: str) -> dict[str, str]:
+    """`attack_class -> first actionable mechanical-failure reason` for this run.
+
+    The class is recovered from `FindingRow.hunter_prompt_version` (`"<class>@<ver>"`,
+    set by `hunt._attack_class_body`). Shared by Gapfill (re-sweep a cell whose
+    finding was mechanically invalid) and Feedback (rewrite that cell's prompt).
+    """
+    if store is None:
+        return {}
+    try:
+        rows = store.run_findings(run_id, ["mechanical_failed"])
+    except Exception:  # noqa: BLE001 — callers degrade to their other signals
+        return {}
+    out: dict[str, str] = {}
+    for row in rows:
+        cls = (row.hunter_prompt_version or "").split("@")[0] or "?"
+        if cls in out:
+            continue
+        reasons = store.finding_reasons(row.finding_id, "mechanical")
+        hits = [r for r in reasons if any(k in r.lower() for k in _ACTIONABLE_MECH)]
+        if hits:
+            out[cls] = hits[0][:200]
+    return out

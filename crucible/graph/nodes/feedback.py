@@ -21,7 +21,7 @@ import logging
 import os
 from pathlib import Path
 
-from crucible.coverage import parse_coverage
+from crucible.coverage import actionable_mechanical_failures, parse_coverage
 from crucible.graph.state import CrucibleState
 from crucible.workspace.fs import commit_node
 
@@ -29,12 +29,6 @@ log = logging.getLogger("crucible.feedback")
 
 FEEDBACK_MAX_REWRITES = int(os.environ.get("CRUCIBLE_FEEDBACK_MAX_REWRITES", "6"))
 REPEATED_MISS_THRESHOLD = 2
-
-# Mechanical reasons that are the Hunter's fault (and thus worth feeding back).
-# "poc_gate not implemented" / "finding not found" are harness gaps, not Hunter
-# errors — never rewrite a prompt over those.
-_ACTIONABLE = ("does not exist", "out of bounds", "does not apply", "not fully populated",
-               "tautology", "poc_test is empty")
 
 
 def run(state: CrucibleState, deps=None) -> CrucibleState:
@@ -47,7 +41,7 @@ def run(state: CrucibleState, deps=None) -> CrucibleState:
 
     store = getattr(deps, "store", None)
     stats = parse_coverage(ws)
-    fail_reason_by_class = _mechanical_failures(store, run_id)
+    fail_reason_by_class = actionable_mechanical_failures(store, run_id)
 
     counts = {"validation_failure": 0, "shallow": 0, "repeated_miss": 0}
     rewrites = 0
@@ -96,27 +90,3 @@ def run(state: CrucibleState, deps=None) -> CrucibleState:
     log.info("feedback done  rewrote %d/%d queued prompt(s)  %s",
              rewrites, len(pending), counts)
     return state
-
-
-def _mechanical_failures(store, run_id: str) -> dict[str, str]:
-    """attack_class -> first actionable mechanical-failure reason for this run.
-
-    The class is recovered from `FindingRow.hunter_prompt_version` (`"<class>@<ver>"`,
-    set by `hunt._attack_class_body`)."""
-    if store is None:
-        return {}
-    out: dict[str, str] = {}
-    try:
-        rows = store.run_findings(run_id, ["mechanical_failed"])
-    except Exception as e:  # noqa: BLE001 — feedback degrades to the other two triggers
-        log.debug("feedback  could not read mechanical failures: %s", e)
-        return {}
-    for row in rows:
-        cls = (row.hunter_prompt_version or "").split("@")[0] or "?"
-        if cls in out:
-            continue
-        reasons = store.finding_reasons(row.finding_id, "mechanical")
-        actionable = [r for r in reasons if any(k in r.lower() for k in _ACTIONABLE)]
-        if actionable:
-            out[cls] = actionable[0][:200]
-    return out
