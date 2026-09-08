@@ -24,9 +24,15 @@ from pathlib import Path
 from crucible.config import MODEL_CALLS_PER_TASK
 from crucible.graph.state import CrucibleState
 from crucible.obs import span
-from crucible.recon.decompose import decompose, render_architecture, task_cap
-from crucible.recon.schema import MapContribution, Seed, ThreatModel
+from crucible.recon.decompose import (
+    decompose,
+    render_architecture,
+    subsystem_rows,
+    task_cap,
+)
+from crucible.recon.schema import Seed, SubsystemMap, ThreatModel
 from crucible.recon.seed import build_seed
+from crucible.recon.synthesize import derive_auth_model, rank_attack_surface
 from crucible.workspace.fs import commit_node
 
 log = logging.getLogger("crucible.recon")
@@ -70,20 +76,32 @@ def run(state: CrucibleState, deps=None) -> CrucibleState:
         seed.stats.get("reflection_facts", 0), seed.stats.get("call_edges", 0),
     )
 
-    # ---- R1: map (model, fan-out over slices) ---------------------
-    contributions: list[MapContribution] = []
+    # ---- R1b: subsystem maps (model, fan-out over slices) --------
+    # Phase 1 keeps the mechanical `_slice_repo` partition (fixed N=3); Phase 2
+    # replaces it with the R1a lead-agent ModuleMap. The synthesis + doc render
+    # below already consume a generic `partition`, so swapping the source later
+    # is contained.
+    slices = _slice_repo(seed, RECON_SUBAGENTS)
+    partition = _slices_to_partition(slices)
+    subsystem_maps: list[SubsystemMap] = []
     threat_model: ThreatModel | None = None
     registry = getattr(deps, "registry", None)
 
-    if registry is not None:
+    if registry is not None and slices:
         with span("recon.r1_map"):
             t0 = time.monotonic()
-            contributions = _run_map(seed, repo, run_id, deps, errors_path)
-        log.info("R1 map  %.1fs  %d/%d slices contributed",
-                 time.monotonic() - t0, len(contributions), RECON_SUBAGENTS)
+            subsystem_maps = _run_map(seed, repo, run_id, deps, errors_path, slices)
+        log.info("R1b subsystem maps  %.1fs  %d/%d subsystems contributed",
+                 time.monotonic() - t0, len(subsystem_maps), len(slices))
     else:
-        log.info("R1 map  skipped (no registry) — using the seed-only map")
-    architecture_md = render_architecture(seed, contributions)
+        log.info("R1b subsystem maps  skipped (no registry) — seed-only map")
+
+    # ---- R1c: synthesis (deterministic) ------------------------
+    auth_model = derive_auth_model(seed, subsystem_maps, None)
+    # draft doc (no ranked surface / quality yet) — this is R2's input
+    architecture_md = render_architecture(
+        seed, subsystem_maps, partition=partition, auth_model=auth_model
+    )
     (ws / "architecture.md").write_text(architecture_md)
 
     # ---- R2: threat model (model) --------------------------------
@@ -101,6 +119,28 @@ def run(state: CrucibleState, deps=None) -> CrucibleState:
         else:
             log.warning("R2 threat model  %.1fs  failed — see recon/errors.jsonl",
                         time.monotonic() - t0)
+
+    # ---- R1c: finalise synthesis with the threat model ---------
+    quality = _recon_quality(registry, slices, subsystem_maps, threat_model)
+    attack_surface = rank_attack_surface(
+        seed, subsystem_maps, None, threat_model, partition
+    )
+    architecture_md = render_architecture(
+        seed, subsystem_maps, partition=partition, auth_model=auth_model,
+        attack_surface=attack_surface, quality=quality,
+    )
+    (ws / "architecture.md").write_text(architecture_md)
+    (recon_dir / "attack_surface.json").write_text(
+        json.dumps([a.model_dump(mode="json") for a in attack_surface], indent=2)
+    )
+    (recon_dir / "recon_quality.txt").write_text(quality)
+    subsystems = subsystem_rows(partition, seed)
+    (recon_dir / "subsystems.json").write_text(json.dumps(subsystems, indent=2))
+    state["recon_quality"] = quality
+    state["subsystems"] = subsystems
+    top = "; ".join(f"{a.target}={a.score:g}" for a in attack_surface[:3]) or "(none)"
+    log.info("R1c synthesis  quality=%s  subsystems=%d  attack_surface=%d  top: %s",
+             quality, len(subsystems), len(attack_surface), top)
 
     # ---- R3: decompose (deterministic) --------------------------
     cap = task_cap(seed)
@@ -195,7 +235,36 @@ def _map_task_text(sl: dict, seed: Seed) -> str:
     )
 
 
-def _run_map(seed: Seed, repo: str, run_id: str, deps, errors_path: Path) -> list[MapContribution]:
+def _slices_to_partition(slices: list[dict]) -> list[dict]:
+    """Adapt `_slice_repo` output to the generic partition shape the synthesis
+    and doc render consume (Phase 2 produces the same shape from a ModuleMap)."""
+    return [
+        {
+            "name": sl["name"],
+            "responsibility": "",
+            "external_facing": False,
+            "paths": sl.get("areas", []),
+            "files": sl.get("files", []),
+            "depends_on": [],
+        }
+        for sl in slices
+    ]
+
+
+def _recon_quality(registry, slices, subsystem_maps, threat_model) -> str:
+    """full  = every subsystem contributed a map AND R2 succeeded
+       partial = some maps, or R2 missing
+       seed_only = no registry, or not one usable map."""
+    if registry is None or not subsystem_maps:
+        return "seed_only"
+    if len(subsystem_maps) >= len(slices) and threat_model is not None:
+        return "full"
+    return "partial"
+
+
+def _run_map(
+    seed: Seed, repo: str, run_id: str, deps, errors_path: Path, slices: list[dict]
+) -> list[SubsystemMap]:
     from crucible.agents.tools import read_only_fs_tools
     from crucible.llm.registry import ModelRole
     from crucible.skills import load_skill
@@ -204,9 +273,9 @@ def _run_map(seed: Seed, repo: str, run_id: str, deps, errors_path: Path) -> lis
     allowed = {t.name for t in tools}
     prompt = load_skill("recon/map.md")
     model = deps.registry.chat_model(ModelRole.RECON)
-    out: list[MapContribution] = []
+    out: list[SubsystemMap] = []
 
-    for sl in _slice_repo(seed, RECON_SUBAGENTS):
+    for sl in slices:
         try:
             task = _map_task_text(sl, seed)
             msgs = _explore(
@@ -214,9 +283,9 @@ def _run_map(seed: Seed, repo: str, run_id: str, deps, errors_path: Path) -> lis
                 thread_id=f"{run_id}:recon:map:{sl['name']}",
                 tools=tools, allowed=allowed, system_prompt=prompt, task_text=task,
             )
-            mc = _emit(model, prompt, task, _digest(msgs), MapContribution)
-            mc.slice_name = sl["name"]
-            out.append(mc)
+            sm = _emit(model, prompt, task, _digest(msgs), SubsystemMap)
+            sm.subsystem = sl["name"]
+            out.append(sm)
         except Exception as e:  # noqa: BLE001 — resilience: log and continue
             _log_error(errors_path, "R1", sl["name"], _fmt_exc(e))
     return out

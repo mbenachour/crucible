@@ -94,6 +94,8 @@ def run(
         "primary_language": language,
         "architecture_path": "",
         "taxonomy_path": "",
+        "recon_quality": "",
+        "subsystems": [],
         "pending_hunts": [],
         "completed_cells": [],
         "finding_ids": [],
@@ -104,6 +106,11 @@ def run(
     }
     typer.echo(f"run_id={run_id}  commit={repo_commit[:12] or '(none)'}  language={language}")
     from crucible.graph.hooks import graph_recursion_limit
+
+    def _echo_recon_quality() -> None:
+        marker = workspace / "recon" / "recon_quality.txt"
+        if marker.is_file():
+            typer.echo(f"recon_quality={marker.read_text().strip()}")
 
     try:
         with span("crucible.run", run_id=run_id, repo=str(repo), language=language):
@@ -119,6 +126,7 @@ def run(
         # boundary (config, registry, store, workspace, checkpointer) ran.
         elapsed = time.monotonic() - started
         log.warning("run %s stopped at stub node after %.1fs: %s", run_id, elapsed, e)
+        _echo_recon_quality()
         typer.secho(f"stopped at stub node: {e}", fg=typer.colors.YELLOW)
         typer.echo(f"resume after implementing it with:  crucible run --repo {repo} --resume {run_id}")
         typer.echo(f"logs: {workspace}/run.log")
@@ -126,6 +134,7 @@ def run(
     except Exception:
         log.exception("run %s failed after %.1fs", run_id, time.monotonic() - started)
         raise
+    _echo_recon_quality()
     log.info("run %s complete in %.1fs", run_id, time.monotonic() - started)
 
 

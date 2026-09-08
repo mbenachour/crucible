@@ -18,5 +18,10 @@ findings.sqlite*
 build/
 dist/
 
-# Entire test tree is intentionally untracked (per project decision).
-tests/
+# tests/ was untracked (issue #30). The Recon re-engineering (issue #34) needs
+# its acceptance suite committed, so the test *modules* and the hermetic
+# generated fixtures under tests/ are tracked again. Local scratch fixtures and
+# caches stay ignored.
+tests/**/__pycache__/
+tests/.pytest_cache/
+tests/fixtures/repos/_local/

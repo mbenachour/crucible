@@ -56,6 +56,14 @@ CONTEXT_CEILING = 0.25          # target share of the window the harness holds
 SUMMARIZE_AT_FRACTION = 0.70    # SummarizationMiddleware trigger
 MODEL_CALLS_PER_TASK = 60       # ModelCallLimitMiddleware run_limit (paired with §8 cap)
 
+# Recon re-engineering knobs (issue #34). Env overrides use the CRUCIBLE_ prefix.
+#  - RECON_MAX_SUBAGENTS  : hard cap on R1b subsystem agents (N = clamp(1, len, this))
+#  - RECON_MAX_PARALLEL   : R1b fan-out width; 1 keeps the sequential path
+#  - RECON_ORIENT_READ_BUDGET : model-call budget for the single R1a lead agent
+RECON_MAX_SUBAGENTS = max(1, int(os.environ.get("CRUCIBLE_RECON_MAX_SUBAGENTS", "8")))
+RECON_MAX_PARALLEL = max(1, int(os.environ.get("CRUCIBLE_RECON_MAX_PARALLEL", "4")))
+RECON_ORIENT_READ_BUDGET = max(4, int(os.environ.get("CRUCIBLE_RECON_ORIENT_BUDGET", "24")))
+
 
 def _apply_toml(endpoints: dict[ModelRole, ModelEndpoint], path: Path) -> dict[ModelRole, ModelEndpoint]:
     data = tomllib.loads(path.read_text())

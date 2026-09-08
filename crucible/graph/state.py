@@ -33,6 +33,9 @@ class CrucibleState(TypedDict):
     architecture_path: str
     taxonomy_path: str
 
+    recon_quality: str               # full | partial | seed_only (issue #34)
+    subsystems: list[dict]           # [{name, responsibility, external_facing, files, loc}]
+
     pending_hunts: list[HuntTask]     # attack_class + scope_hint only
     completed_cells: list[str]        # "area::attack_class"
 

@@ -190,17 +190,27 @@ and git-commits the workspace on exit. In the target architecture each stage is 
 `create_agent` + middleware stack; today the model-facing bodies are stubs with
 the spec contract in the docstring.
 
-### 4.1 `recon.py` — Recon (§9.1, issue #5)  · *R0 + R3 done; R1 + R2 wired*
+### 4.1 `recon.py` — Recon (§9.1, issues #5 + #34)  · *R0/R1b/R1c/R3 done; R1a orient + parallel fan-out land in #34 phases 2–3*
 
-Four sub-steps in one node (shape from Visa VVAH S0–S3 / Glasswing's "threat
-model builder"), implemented in `crucible/recon/`:
+Sub-steps in one node (shape from Visa VVAH S0–S3 / Glasswing's "threat model
+builder"), implemented in `crucible/recon/`. Issue #34 splits the old R1 into
+**R1a orient** (top-down lead agent → `ModuleMap`), **R1b subsystem maps** (one
+agent per subsystem), and **R1c synthesis** (deterministic — the cross-cutting
+content no single subsystem agent sees):
 
 | Step | Module | Model? | Artifact |
 |---|---|---|---|
 | **R0 seed** | `recon/seed.py` | no | `workspace/recon/seed.json` — file index + roles, framework detection, repo-kind, build/run commands, framework-aware entry points classified into 7 kinds (`network/framework/ipc/file/cli/deserialization/other`), reflection/dynamic-dispatch facts, tree-sitter name-based call graph |
-| **R1 map** | `recon/decompose.render_architecture` + fan-out | RECON | `workspace/architecture.md` — N `build_agent` calls over LOC-balanced slices, `response_format=MapContribution`, deterministic render |
+| **R1a orient** | `recon/orient.py` + `_run_orient` | RECON | `workspace/recon/module_map.json` — *(phase 2)* lead agent's `ModuleMap`; deterministic `partition_subsystems` guard rail with `fallback_partition` (the pre-#34 LOC-balanced slicing) |
+| **R1b subsystem maps** | `_run_map` fan-out | RECON | per-subsystem `SubsystemMap` — `_emit` forces one `tool_choice=SubsystemMap` call; *(phase 3)* `ThreadPoolExecutor(RECON_MAX_PARALLEL)` |
+| **R1c synthesis** | `recon/synthesize.py` + `recon/decompose.render_architecture` | no | `workspace/architecture.md` (11 target sections), `workspace/recon/attack_surface.json` — `rank_attack_surface` (exposure × entry-kind severity × sink-proximity × threat-model corroboration), `derive_auth_model`, `stitch_data_flows`; a degradation banner when `recon_quality != full` |
 | **R2 threat model** | node `_run_threatmodel` | RECON | `workspace/recon/threat_model.json` — `response_format=ThreatModel`; attackers, assets, trust boundaries, STRIDE, repo-specific classes |
-| **R3 decompose** | `recon/decompose.decompose` | no | seeds `state["pending_hunts"]` + `workspace/recon/task_manifest.json` |
+| **R3 decompose** | `recon/decompose.decompose` | no | seeds `state["pending_hunts"]` + `workspace/recon/task_manifest.json`; *(phase 4)* `area` = owning subsystem, cross-subsystem stitched flows → `taint` chunks |
+
+`recon_quality ∈ {full, partial, seed_only}` is written to graph state (and
+`workspace/recon/recon_quality.txt`, echoed by the CLI): `full` = every
+subsystem contributed a map **and** R2 succeeded. Knobs: `CRUCIBLE_RECON_MAX_SUBAGENTS`
+(8), `CRUCIBLE_RECON_MAX_PARALLEL` (4), `CRUCIBLE_RECON_ORIENT_BUDGET` (24).
 
 **Repo-kind → baseline attack classes** (`BASELINE_BY_KIND`): `web_api` → OWASP-ish,
 `native` → memory-safety, `mobile` → MASVS-ish, `library`/`iac`/`cli`/`unknown`.

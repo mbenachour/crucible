@@ -97,21 +97,88 @@ class Seed(BaseModel):
     stats: dict[str, int] = Field(default_factory=dict)
 
 
-# --- R1: Map contribution (per slice) -----------------------------------
+# --- R1a: Module map (lead agent — the top-down read, issue #34) --------
 
 
-class MapContribution(BaseModel):
-    slice_name: str = ""
+class Subsystem(BaseModel):
+    """One semantic unit of the repo — a responsibility, not a directory.
+
+    Kept deliberately shallow: `paths` are dir/file prefixes the deterministic
+    guard rail (`crucible/recon/orient.py`) resolves to a concrete file set.
+    """
+
+    name: str
+    responsibility: str = ""
+    paths: list[str] = Field(
+        default_factory=list, description="dir or file path prefixes this subsystem owns"
+    )
+    external_facing: bool = Field(
+        default=False, description="does attacker-controlled input reach this subsystem directly"
+    )
+    depends_on: list[str] = Field(default_factory=list, description="names of subsystems it calls")
+
+
+class ModuleMap(BaseModel):
+    """R1a output — the lead agent's top-down read of the whole repo."""
+
+    subsystems: list[Subsystem] = Field(default_factory=list)
+    build: list[str] = Field(default_factory=list)
+    run: list[str] = Field(default_factory=list)
+    test: list[str] = Field(default_factory=list)
+    auth_model: str = Field(
+        default="", description="one paragraph: how the repo authenticates / authorizes callers"
+    )
+
+
+# --- R1b: Subsystem map (per subsystem, model) -------------------------
+
+
+class SubsystemMap(BaseModel):
+    """R1b output for one subsystem. Generalises the old `MapContribution`
+    (which had `slice_name` + 5 list fields) with the boundary-crossing and
+    sink/auth/parser detail R1c synthesis needs."""
+
+    subsystem: str = ""
     entry_points: list[str] = Field(
         default_factory=list,
-        description="attacker-reachable entry points in this slice as 'file:line kind — note'",
+        description="attacker-reachable entry points here as 'file:line kind — note'",
     )
     trust_boundaries: list[str] = Field(default_factory=list)
     external_inputs: list[str] = Field(default_factory=list)
     data_flows: list[str] = Field(
-        default_factory=list, description="short 'source -> sink' notes"
+        default_factory=list,
+        description="boundary-crossing 'A/x.py:10 -> B/y.py:88' source->sink notes, naming the neighbour",
+    )
+    dangerous_sinks: list[str] = Field(
+        default_factory=list, description="'file:line' of exec/query/deserialize/write sinks"
+    )
+    auth_touchpoints: list[str] = Field(
+        default_factory=list, description="where auth is checked (or conspicuously not)"
+    )
+    third_party_parsers: list[str] = Field(
+        default_factory=list, description="libraries that parse untrusted bytes"
     )
     notes: str = ""
+
+    @property
+    def slice_name(self) -> str:  # back-compat with pre-#34 callers
+        return self.subsystem
+
+
+# Deprecated alias — kept so any out-of-tree import keeps resolving.
+MapContribution = SubsystemMap
+
+
+# --- R1c: ranked attack surface (deterministic synthesis) --------------
+
+
+class AttackSurfaceItem(BaseModel):
+    target: str = Field(description="what an attacker would hit, e.g. 'POST /upload handler'")
+    subsystem: str = ""
+    entry_point: str = Field(default="", description="'file:line kind'")
+    exposure: str = Field(default="internal", description="external | internal")
+    rationale: str = ""
+    score: float = 0.0
 
 
 # --- R2: Threat model --------------------------------------------------

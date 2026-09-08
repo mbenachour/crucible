@@ -6,11 +6,15 @@ Design: issue #5. Shape borrowed from Visa VVAH's S0–S3, expressed in our stac
 """
 
 from crucible.recon.schema import (  # noqa: F401
+    AttackSurfaceItem,
     EntryPoint,
     EntryPointKind,
     HuntChunk,
     MapContribution,
+    ModuleMap,
     RepoKind,
     Seed,
+    Subsystem,
+    SubsystemMap,
     ThreatModel,
 )

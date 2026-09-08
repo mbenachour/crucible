@@ -9,14 +9,18 @@ Also renders `architecture.md` from the seed + R1 contributions.
 from __future__ import annotations
 
 from crucible.recon.schema import (
+    AttackSurfaceItem,
     ChunkType,
+    EntryPoint,
     EntryPointKind,
     HuntChunk,
-    MapContribution,
+    ModuleMap,
     RepoKind,
     Seed,
+    SubsystemMap,
     ThreatModel,
 )
+from crucible.recon.synthesize import owner_of, stitch_data_flows
 
 # repo-kind -> starting attack-class checklist (VVAH's repo-kind baselines)
 BASELINE_BY_KIND: dict[RepoKind, list[str]] = {
@@ -218,27 +222,119 @@ def _priority(kind: EntryPointKind, cls: str) -> int:
 
 # ---------------------------------------------------- architecture.md render
 
-def render_architecture(seed: Seed, contributions: list[MapContribution]) -> str:
+# The 11 target sections from issue #34. The golden-file test asserts these
+# headers (structure, not prose — survives model drift).
+ARCHITECTURE_SECTIONS: list[str] = [
+    "## 1. Overview",
+    "## 2. Build / run / test",
+    "## 3. Subsystem map",
+    "## 4. Entry points by kind",
+    "## 5. Trust boundaries",
+    "## 6. Auth / authz model",
+    "## 7. Data flows (end-to-end)",
+    "## 8. External dependencies / parsers",
+    "## 9. Reflection / dynamic dispatch",
+    "## 10. Ranked attack surface",
+    "## 11. Call-graph summary",
+]
+
+_QUALITY_BANNER = {
+    "seed_only": (
+        "> ⚠️ **Recon degradation — `seed_only`.** The RECON model returned no "
+        "usable subsystem maps; every section below is derived from the static "
+        "R0 seed alone. Treat coverage as best-effort and unreviewed."
+    ),
+    "partial": (
+        "> ⚠️ **Recon degradation — `partial`.** Some subsystem agents (or the "
+        "R2 threat model) returned nothing; the synthesis below is missing their "
+        "input. Sections may under-report."
+    ),
+}
+
+
+def subsystem_rows(partition: list[dict] | None, seed: Seed) -> list[dict]:
+    """Normalise a partition for section 3: name, responsibility, external flag,
+    and the source-LOC it owns (from the seed)."""
+    loc_by_file = {f.path: f.loc for f in seed.files if f.role == "source"}
+    rows: list[dict] = []
+    for sub in partition or ():
+        files = [p for p in sub.get("files", ()) if p in loc_by_file]
+        if not files:
+            files = [
+                p for p in loc_by_file
+                if owner_of([sub], p) == sub.get("name")
+            ]
+        rows.append({
+            "name": sub.get("name", "misc"),
+            "responsibility": sub.get("responsibility", ""),
+            "external_facing": bool(sub.get("external_facing")),
+            "files": len(files),
+            "loc": sum(loc_by_file.get(p, 0) for p in files),
+            "depends_on": sub.get("depends_on", []),
+        })
+    return rows
+
+
+def render_architecture(
+    seed: Seed,
+    subsystem_maps: list[SubsystemMap] | None = None,
+    *,
+    partition: list[dict] | None = None,
+    module_map: ModuleMap | None = None,
+    auth_model: str = "",
+    attack_surface: list[AttackSurfaceItem] | None = None,
+    quality: str | None = None,
+) -> str:
+    subsystem_maps = subsystem_maps or []
     L: list[str] = []
     L.append(f"# Architecture — {seed.repo_path}")
     L.append("")
+    if quality is not None and quality != "full":
+        L.append(_QUALITY_BANNER.get(quality, _QUALITY_BANNER["partial"]))
+        L.append("")
+
+    # 1 --------------------------------------------------------------
+    L.append(ARCHITECTURE_SECTIONS[0])
     L.append(f"- **repo kind:** {seed.repo_kind.value}")
     L.append(f"- **primary language:** {seed.primary_language}")
     L.append(f"- **frameworks:** {', '.join(seed.frameworks) or '(none detected)'}")
     L.append(f"- **files:** {seed.stats.get('source_files', 0)} source "
              f"/ {seed.stats.get('files', 0)} total")
+    L.append(f"- **recon quality:** {quality or 'n/a'}")
     L.append("")
 
-    L.append("## Build / run")
-    for label, cmds in (("build", seed.build.build), ("run", seed.build.run), ("test", seed.build.test)):
+    # 2 --------------------------------------------------------------
+    L.append(ARCHITECTURE_SECTIONS[1])
+    mm = module_map or ModuleMap()
+    for label, seed_cmds, mm_cmds in (
+        ("build", seed.build.build, mm.build),
+        ("run", seed.build.run, mm.run),
+        ("test", seed.build.test, mm.test),
+    ):
+        cmds = mm_cmds or seed_cmds
         L.append(f"- **{label}:** " + ("; ".join(cmds) if cmds else "(unknown)"))
     L.append("")
 
-    L.append("## Entry points (by kind)")
+    # 3 --------------------------------------------------------------
+    L.append(ARCHITECTURE_SECTIONS[2])
+    rows = subsystem_rows(partition, seed)
+    if not rows:
+        L.append("_(single undivided unit — no subsystem partition available)_")
+    for r in rows:
+        tag = " · **external-facing**" if r["external_facing"] else ""
+        dep = f" · depends on: {', '.join(r['depends_on'])}" if r["depends_on"] else ""
+        L.append(f"- **{r['name']}** — {r['responsibility'] or '(responsibility not stated)'} "
+                 f"({r['files']} files / {r['loc']} LOC){tag}{dep}")
+    L.append("")
+
+    # 4 --------------------------------------------------------------
+    L.append(ARCHITECTURE_SECTIONS[3])
     by_kind: dict[str, list[str]] = {}
     for ep in seed.entry_points:
+        sub = owner_of(partition, ep.file)
         by_kind.setdefault(ep.kind.value, []).append(
-            f"`{ep.file}:{ep.line}`" + (f" — {ep.framework}" if ep.framework else "")
+            f"`{ep.file}:{ep.line}` `[{sub}]`"
+            + (f" — {ep.framework}" if ep.framework else "")
             + (f" — `{ep.evidence}`" if ep.evidence else "")
         )
     if not by_kind:
@@ -248,29 +344,84 @@ def render_architecture(seed: Seed, contributions: list[MapContribution]) -> str
         L.extend(f"- {x}" for x in by_kind[kind][:40])
     L.append("")
 
+    # 5 --------------------------------------------------------------
+    L.append(ARCHITECTURE_SECTIONS[4])
+    boundaries = _dedup(b for sm in subsystem_maps for b in sm.trust_boundaries)
+    if not boundaries:
+        boundaries = _dedup(
+            f"{s['name']} ⇄ {d} (subsystem dependency)"
+            for s in (partition or [])
+            for d in s.get("depends_on", [])
+        )
+    if boundaries:
+        L.extend(f"- {b}" for b in boundaries[:40])
+    else:
+        L.append("_(none identified)_")
+    L.append("")
+
+    # 6 --------------------------------------------------------------
+    L.append(ARCHITECTURE_SECTIONS[5])
+    L.append(auth_model or "_(not derived)_")
+    L.append("")
+
+    # 7 --------------------------------------------------------------
+    L.append(ARCHITECTURE_SECTIONS[6])
+    flows = stitch_data_flows(subsystem_maps, partition)
+    if flows:
+        L.extend(f"- {f}" for f in flows[:60])
+    else:
+        L.append("_(no data flows reported by R1b)_")
+    L.append("")
+
+    # 8 --------------------------------------------------------------
+    L.append(ARCHITECTURE_SECTIONS[7])
+    parsers = _dedup(p for sm in subsystem_maps for p in sm.third_party_parsers)
+    ext_inputs = _dedup(e for sm in subsystem_maps for e in sm.external_inputs)
+    if parsers:
+        L.append("**Third-party parsers of untrusted input**")
+        L.extend(f"- {p}" for p in parsers[:40])
+    if ext_inputs:
+        L.append("**External inputs**")
+        L.extend(f"- {e}" for e in ext_inputs[:40])
+    if not parsers and not ext_inputs:
+        L.append("_(none reported by R1b)_")
+    L.append("")
+
+    # 9 --------------------------------------------------------------
+    L.append(ARCHITECTURE_SECTIONS[8])
     if seed.reflection_facts:
-        L.append("## Reflection / dynamic dispatch (breaks naive reachability)")
         L.extend(f"- `{r.file}:{r.line}` **{r.kind}** — `{r.snippet}`"
                  for r in seed.reflection_facts[:40])
-        L.append("")
+    else:
+        L.append("_(no reflection / dynamic-dispatch facts in the seed)_")
+    L.append("")
 
-    if contributions:
-        L.append("## Model-refined map")
-        for c in contributions:
-            L.append(f"### slice: {c.slice_name or '(unnamed)'}")
-            for label, items in (
-                ("entry points", c.entry_points), ("trust boundaries", c.trust_boundaries),
-                ("external inputs", c.external_inputs), ("data flows", c.data_flows),
-            ):
-                if items:
-                    L.append(f"**{label}**")
-                    L.extend(f"- {i}" for i in items[:30])
-            if c.notes:
-                L.append(c.notes.strip())
-            L.append("")
+    # 10 -------------------------------------------------------------
+    L.append(ARCHITECTURE_SECTIONS[9])
+    if attack_surface:
+        L.append("| # | target | subsystem | entry point | exposure | score | rationale |")
+        L.append("|---|---|---|---|---|---|---|")
+        for i, a in enumerate(attack_surface[:30], 1):
+            L.append(f"| {i} | {a.target} | {a.subsystem} | `{a.entry_point}` | "
+                     f"{a.exposure} | {a.score:g} | {a.rationale} |")
+    else:
+        L.append("_(no attacker-reachable entry points identified)_")
+    L.append("")
 
-    L.append("## Call graph")
+    # 11 -------------------------------------------------------------
+    L.append(ARCHITECTURE_SECTIONS[10])
     L.append(f"- {seed.stats.get('call_edges', 0)} name-based edges "
              "(best-effort, not resolved / not path-sensitive)")
     L.append("")
     return "\n".join(L)
+
+
+def _dedup(xs) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for x in xs:
+        x = (x or "").strip()
+        if x and x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
