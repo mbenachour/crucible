@@ -1,13 +1,18 @@
 """StateGraph assembly, edges, checkpointer (specs.md §4, §3).
 
-Phase 1 topology:
+Topology (Phase 1 tail + the Phase 2 producer-consumer loop, §11):
 
     recon
-      -> hunt            (self-loop for bounded continuation, §8)
+      -> hunt                  (self-loop for bounded continuation, §8)
+      -> dedup                 (inverted-index shortlist + agent judge, issue #20)
       -> validate_mechanical   (no model calls; cheapest filter first)
-      -> validate_bug          (VALIDATOR_BUG; "is it real?")
-      -> validate_reachability (VALIDATOR_REACH; "can an attacker get here?")
-      -> report                (deterministic; no model)
+      -> gapfill               (re-queue under-tested cells, issue #19)
+      -> feedback              (rewrite queued prompts from failures, issue #21)
+      -> loop_control ─┬─(rehunt)─→ hunt      (issue #22: stages 4-8 loop)
+                       └─(proceed)→ validate_bug
+      -> validate_bug          (VALIDATOR_BUG; "is it real?")       [Phase 1 stub]
+      -> validate_reachability (VALIDATOR_REACH; "can an attacker get here?") [stub]
+      -> report                (deterministic; no model)           [Phase 1 stub]
 
 Persistence before parallelism (§1.3): the SQLite checkpointer is wired first
 and resume-from-crash is proven before Hunt fan-out is enabled.
@@ -27,11 +32,15 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 
 from crucible.graph.deps import NodeDeps
-from crucible.graph.hooks import continuation_gate
+from crucible.graph.hooks import continuation_gate, loop_gate
 from crucible.graph.nodes import (
     recon,
     hunt,
+    dedup,
     validate_mechanical,
+    gapfill,
+    feedback,
+    loop_control,
     validate_bug,
     validate_reachability,
     report,
@@ -67,7 +76,11 @@ def build_graph(deps: NodeDeps, checkpoint_db: str | Path = "checkpoints.sqlite"
 
     g.add_node("recon", _traced("recon", recon.run, deps))
     g.add_node("hunt", _traced("hunt", hunt.run, deps))
+    g.add_node("dedup", _traced("dedup", dedup.run, deps))
     g.add_node("validate_mechanical", _traced("validate_mechanical", validate_mechanical.run, deps))
+    g.add_node("gapfill", _traced("gapfill", gapfill.run, deps))
+    g.add_node("feedback", _traced("feedback", feedback.run, deps))
+    g.add_node("loop_control", _traced("loop_control", loop_control.run, deps))
     g.add_node("validate_bug", _traced("validate_bug", validate_bug.run, deps))
     g.add_node("validate_reachability", _traced("validate_reachability", validate_reachability.run, deps))
     g.add_node("report", _traced("report", report.run, deps))
@@ -81,10 +94,21 @@ def build_graph(deps: NodeDeps, checkpoint_db: str | Path = "checkpoints.sqlite"
     g.add_conditional_edges(
         "hunt",
         continuation_gate,
-        {"continue": "hunt", "done": "validate_mechanical"},
+        {"continue": "hunt", "done": "dedup"},
     )
 
-    g.add_edge("validate_mechanical", "validate_bug")
+    # Phase 2 producer-consumer loop (§11, issue #22): hunt output -> dedup ->
+    # validate -> gapfill/feedback re-queue -> back to hunt, bounded by MAX_CYCLES.
+    g.add_edge("dedup", "validate_mechanical")
+    g.add_edge("validate_mechanical", "gapfill")
+    g.add_edge("gapfill", "feedback")
+    g.add_edge("feedback", "loop_control")
+    g.add_conditional_edges(
+        "loop_control",
+        loop_gate,
+        {"rehunt": "hunt", "proceed": "validate_bug"},
+    )
+
     g.add_edge("validate_bug", "validate_reachability")
     g.add_edge("validate_reachability", "report")
     g.add_edge("report", END)

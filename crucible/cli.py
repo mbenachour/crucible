@@ -99,12 +99,21 @@ def run(
         "finding_ids": [],
         "fork_count": 0,
         "continuation_count": 0,
+        "cycle_count": 0,
         "token_spend": 0,
     }
     typer.echo(f"run_id={run_id}  commit={repo_commit[:12] or '(none)'}  language={language}")
+    from crucible.graph.hooks import graph_recursion_limit
+
     try:
         with span("crucible.run", run_id=run_id, repo=str(repo), language=language):
-            graph.invoke(initial, config={"configurable": {"thread_id": run_id}})
+            graph.invoke(
+                initial,
+                config={
+                    "configurable": {"thread_id": run_id},
+                    "recursion_limit": graph_recursion_limit(),
+                },
+            )
     except NotImplementedError as e:
         # Phase 1: pipeline nodes are still stubs. Everything up to the node
         # boundary (config, registry, store, workspace, checkpointer) ran.

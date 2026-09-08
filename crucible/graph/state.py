@@ -38,5 +38,6 @@ class CrucibleState(TypedDict):
 
     finding_ids: list[str]
     fork_count: int
-    continuation_count: int
+    continuation_count: int    # inner bounded-continuation loop, reset each cycle (§8)
+    cycle_count: int           # outer producer-consumer cycles (§11, issue #22)
     token_spend: int
