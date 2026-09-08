@@ -169,7 +169,8 @@ def run(state: CrucibleState, deps=None) -> CrucibleState:
     # ---- R3: decompose (deterministic) --------------------------
     cap = task_cap(seed)
     with span("recon.r3_decompose"):
-        chunks = decompose(seed, threat_model, cap)
+        chunks = decompose(seed, threat_model, cap,
+                           partition=partition, subsystem_maps=subsystem_maps)
     (recon_dir / "task_manifest.json").write_text(
         json.dumps(
             {"cap": cap, "count": len(chunks),
@@ -194,6 +195,11 @@ def run(state: CrucibleState, deps=None) -> CrucibleState:
     ]
     from collections import Counter
 
+    xtaint = sum(1 for c in chunks if c.chunk_type.value == "taint" and c.seed_path
+                 and c.seed_path.split(" -> ")[0].split(":")[0]
+                 != c.seed_path.split(" -> ")[-1].split(":")[0])
+    log.info("R3 decompose  areas=%s  cross-subsystem taint=%d",
+             sorted({c.area for c in chunks})[:8], xtaint)
     log.info(
         "R3 decompose  %d/%d chunks queued  %s",
         len(chunks), cap, dict(Counter(c.chunk_type.value for c in chunks)),

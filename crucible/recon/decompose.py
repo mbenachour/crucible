@@ -20,7 +20,7 @@ from crucible.recon.schema import (
     SubsystemMap,
     ThreatModel,
 )
-from crucible.recon.synthesize import owner_of, stitch_data_flows
+from crucible.recon.synthesize import cross_subsystem_flows, owner_of, stitch_data_flows
 
 # repo-kind -> starting attack-class checklist (VVAH's repo-kind baselines)
 BASELINE_BY_KIND: dict[RepoKind, list[str]] = {
@@ -132,10 +132,26 @@ def decompose(
     seed: Seed,
     threat_model: ThreatModel | None,
     cap: int | None = None,
+    *,
+    partition: list[dict] | None = None,
+    subsystem_maps: list[SubsystemMap] | None = None,
 ) -> list[HuntChunk]:
+    """Deterministic hunt-queue seeding. When a `partition` is supplied
+    (issue #34 phase 4) the chunk `area` is the **owning subsystem name** rather
+    than the first path segment, chunks in an `external_facing` subsystem get a
+    priority bump, and boundary-crossing flows from the R1b maps become
+    cross-subsystem `taint` chunks."""
     cap = cap if cap is not None else task_cap(seed)
     incompat = LANG_INCOMPATIBLE.get(seed.primary_language, set())
     baseline = [c for c in BASELINE_BY_KIND.get(seed.repo_kind, []) if c not in incompat]
+
+    external = {p["name"] for p in (partition or []) if p.get("external_facing")}
+
+    def area_of(path: str) -> str:
+        return owner_of(partition, path) if partition else _area_of(path)
+
+    def bump(prio: int, area: str) -> int:
+        return max(1, prio - 1) if area in external else prio
 
     chunks: list[HuntChunk] = []
     seen: set[tuple] = set()
@@ -146,13 +162,22 @@ def decompose(
             seen.add(key)
             chunks.append(c)
 
+    # --- taint: boundary-crossing flows stitched by R1c -------------
+    for src, sink, label in cross_subsystem_flows(subsystem_maps, partition):
+        add(HuntChunk(
+            chunk_type=ChunkType.TAINT, area=area_of(src.split(":")[0]),
+            attack_class="injection_passthrough",
+            scope_hint=f"cross-subsystem flow {label}: tainted data leaves {src} and reaches {sink}",
+            seed_path=f"{src} -> {sink}", priority=1,
+        ))
+
     # --- catch_all: entry point x compatible baseline class -----------
     sinks_by_file: dict[str, list[int]] = {}
     for rf in seed.reflection_facts:
         sinks_by_file.setdefault(rf.file, []).append(rf.line)
 
     for ep in seed.entry_points:
-        area = _area_of(ep.file)
+        area = area_of(ep.file)
         for cls in _classes_for_entrypoint(ep, baseline, incompat):
             # taint chunk if there's a dynamic sink in the same file
             near = [ln for ln in sinks_by_file.get(ep.file, []) if abs(ln - ep.line) <= 120]
@@ -167,16 +192,17 @@ def decompose(
                     chunk_type=ChunkType.CATCH_ALL, area=area, attack_class=cls,
                     scope_hint=f"{ep.kind.value} entry point {ep.symbol or ep.file}:{ep.line}"
                     + (f" ({ep.framework})" if ep.framework else ""),
-                    seed_path=f"{ep.file}:{ep.line}", priority=_priority(ep.kind, cls),
+                    seed_path=f"{ep.file}:{ep.line}", priority=bump(_priority(ep.kind, cls), area),
                 ))
 
     # --- risk: reflection / dynamic-dispatch facts -------------------
     for rf in seed.reflection_facts:
+        area = area_of(rf.file)
         add(HuntChunk(
-            chunk_type=ChunkType.RISK, area=_area_of(rf.file),
+            chunk_type=ChunkType.RISK, area=area,
             attack_class="dynamic_dispatch",
             scope_hint=f"{rf.kind} at {rf.file}:{rf.line}: {rf.snippet}",
-            seed_path=f"{rf.file}:{rf.line}", priority=3,
+            seed_path=f"{rf.file}:{rf.line}", priority=bump(3, area),
         ))
 
     # --- specialist: repo-specific classes from R2 ------------------
@@ -194,17 +220,20 @@ def decompose(
                 priority=6,
             ))
 
-    # --- baseline sweep: every source area × every baseline class -----
+    # --- baseline sweep: every subsystem × every baseline class ------
     # Always emitted (low priority) so coverage does not depend on the seed
-    # having found an entry point. Gapfill (Phase 2) tunes this later.
+    # having found an entry point. Gapfill tunes this later.
     sweep_prio = 7 if chunks else 6
-    areas = sorted({_area_of(f.path) for f in seed.files if f.role == "source"})
+    if partition:
+        areas = [p["name"] for p in partition]
+    else:
+        areas = sorted({_area_of(f.path) for f in seed.files if f.role == "source"})
     for area in areas[:8]:
         for cls in baseline:
             add(HuntChunk(
                 chunk_type=ChunkType.CATCH_ALL, area=area, attack_class=cls,
                 scope_hint=f"baseline sweep of {area}/ for {cls}",
-                priority=sweep_prio,
+                priority=bump(sweep_prio, area),
             ))
 
     chunks.sort(key=lambda c: (c.priority, c.area, c.attack_class))
