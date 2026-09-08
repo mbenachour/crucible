@@ -266,12 +266,18 @@ def _map_task_text(sub: dict, siblings: list[dict], seed: Seed) -> str:
 
 
 def _recon_quality(registry, partition, subsystem_maps, threat_model) -> str:
-    """full  = every subsystem contributed a map AND R2 succeeded
-       partial = some maps, or R2 missing
-       seed_only = no registry, or not one usable map."""
+    """full  = every subsystem contributed a map AND R2 produced real content
+       partial = some maps, or R2 empty / missing
+       seed_only = no registry, or not one usable map.
+
+    An R2 model that returns a parseable-but-empty ThreatModel counts as a soft
+    failure — `full` requires at least one attacker / STRIDE row / repo class."""
     if registry is None or not subsystem_maps:
         return "seed_only"
-    if len(subsystem_maps) >= len(partition) and threat_model is not None:
+    r2_ok = threat_model is not None and bool(
+        threat_model.stride or threat_model.attackers or threat_model.repo_specific_classes
+    )
+    if len(subsystem_maps) >= len(partition) and r2_ok:
         return "full"
     return "partial"
 
