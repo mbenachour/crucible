@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from pathlib import Path
 
 from crucible.config import (
     MODEL_CALLS_PER_TASK,
+    RECON_MAX_PARALLEL,
     RECON_MAX_SUBAGENTS,
     RECON_ORIENT_READ_BUDGET,
 )
@@ -108,11 +110,12 @@ def run(state: CrucibleState, deps=None) -> CrucibleState:
     # ---- R1b: subsystem maps (model, fan-out per subsystem) -----
     subsystem_maps: list[SubsystemMap] = []
     if registry is not None and partition:
+        par = max(1, min(RECON_MAX_PARALLEL, len(partition)))
         with span("recon.r1b_map"):
             t0 = time.monotonic()
             subsystem_maps = _run_map(seed, repo, run_id, deps, errors_path, partition)
-        log.info("R1b subsystem maps  %.1fs  %d/%d subsystems contributed",
-                 time.monotonic() - t0, len(subsystem_maps), len(partition))
+        log.info("R1b subsystem maps  %.1fs  %d/%d subsystems contributed  (parallel=%d)",
+                 time.monotonic() - t0, len(subsystem_maps), len(partition), par)
     else:
         log.info("R1b subsystem maps  skipped (no registry) — seed-only map")
 
@@ -328,6 +331,15 @@ def _run_orient(seed: Seed, repo: str, run_id: str, deps, errors_path: Path) -> 
 def _run_map(
     seed: Seed, repo: str, run_id: str, deps, errors_path: Path, partition: list[dict]
 ) -> list[SubsystemMap]:
+    """R1b fan-out. One independent agent per subsystem (own `create_agent`,
+    own `thread_id`, own context window) — the harness pattern, just run
+    concurrently on a thread pool of width `RECON_MAX_PARALLEL`. `=1` keeps the
+    old strictly-sequential path. Each worker is I/O-bound on the model API, so
+    threads (not processes) are the right tool and no state is shared beyond the
+    lock-guarded `errors.jsonl` append.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
     from crucible.agents.tools import read_only_fs_tools
     from crucible.llm.registry import ModelRole
     from crucible.skills import load_skill
@@ -336,9 +348,9 @@ def _run_map(
     allowed = {t.name for t in tools}
     prompt = load_skill("recon/map.md")
     model = deps.registry.chat_model(ModelRole.RECON)
-    out: list[SubsystemMap] = []
+    err_lock = threading.Lock()
 
-    for sub in partition:
+    def _one(sub: dict) -> SubsystemMap | None:
         try:
             task = _map_task_text(sub, partition, seed)
             msgs = _explore(
@@ -348,10 +360,19 @@ def _run_map(
             )
             sm = _emit(model, prompt, task, _digest(msgs), SubsystemMap)
             sm.subsystem = sub["name"]
-            out.append(sm)
+            return sm
         except Exception as e:  # noqa: BLE001 — resilience: log and continue
-            _log_error(errors_path, "R1b", sub["name"], _fmt_exc(e))
-    return out
+            with err_lock:
+                _log_error(errors_path, "R1b", sub["name"], _fmt_exc(e))
+            return None
+
+    workers = max(1, min(RECON_MAX_PARALLEL, len(partition)))
+    if workers == 1:
+        results = [_one(sub) for sub in partition]
+    else:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="recon-r1b") as ex:
+            results = list(ex.map(_one, partition))
+    return [sm for sm in results if sm is not None]
 
 
 def _threatmodel_task_text(seed: Seed, architecture_md: str) -> str:
