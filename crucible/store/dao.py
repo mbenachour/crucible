@@ -60,6 +60,16 @@ class Store:
             if f:
                 f.status = status
 
+    def link_duplicate(self, dup_id: str, canonical_id: str) -> None:
+        """Fold a duplicate into its canonical (§11 Dedup). Status → `duplicate`;
+        the canonical pointer rides in the payload so no schema migration is
+        needed on an existing `findings.sqlite`."""
+        with self.session() as s:
+            f = s.get(FindingRow, dup_id)
+            if f:
+                f.status = "duplicate"
+                f.payload = {**(f.payload or {}), "duplicate_of": canonical_id}
+
     def add_wish(self, row: WishRow) -> None:
         with self.session() as s:
             s.add(row)
@@ -69,6 +79,39 @@ class Store:
             s.add_all(ToolUsageRow(**r) for r in rows)
 
     # --- reads ---------------------------------------------------------
+    def get_finding(self, finding_id: str) -> FindingRow | None:
+        with self.session() as s:
+            return s.get(FindingRow, finding_id)
+
+    def run_findings(self, run_id: str, statuses: list[str] | None = None) -> list[FindingRow]:
+        """Every finding for a run, optionally filtered to a set of funnel statuses."""
+        with self.session() as s:
+            stmt = select(FindingRow).where(FindingRow.run_id == run_id)
+            if statuses:
+                stmt = stmt.where(FindingRow.status.in_(statuses))
+            return list(s.scalars(stmt))
+
+    def other_run_findings(self, run_id: str, limit: int = 500) -> list[FindingRow]:
+        """Findings from *earlier* runs — the cross-run dedup corpus (§11)."""
+        with self.session() as s:
+            return list(s.scalars(
+                select(FindingRow)
+                .where(FindingRow.run_id != run_id)
+                .order_by(FindingRow.created_at.desc())
+                .limit(limit)
+            ))
+
+    def finding_reasons(self, finding_id: str, pass_name: str) -> list[str]:
+        """Validation reasoning strings recorded for one finding on one pass."""
+        with self.session() as s:
+            rows = s.scalars(
+                select(ValidationRow).where(
+                    ValidationRow.finding_id == finding_id,
+                    ValidationRow.pass_name == pass_name,
+                )
+            )
+            return [r.reasoning for r in rows if r.reasoning]
+
     def upheld_findings(self, run_id: str) -> list[FindingRow]:
         """Findings that survived BOTH bug and reachability passes."""
         with self.session() as s:
