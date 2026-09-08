@@ -312,16 +312,20 @@ no store (skips).
 
 Runs after Validate A. Reconstructs Recon R3's intended `(area × attack_class)`
 matrix from `recon/task_manifest.json`, then classifies each cell against
-`state["completed_cells"]` and the parsed `coverage/<area>.md` blocks
-(`crucible/coverage.py`):
+`state["completed_cells"]`, the parsed `coverage/<area>.md` blocks, and the
+store (`crucible/coverage.py`), re-queued in this order:
 
-- **missing** — never hunted → re-queued first;
-- **weak** — hunted, no finding, fewer than `GAPFILL_CELL_RETRY = 2` passes →
-  re-queued as `[gapfill re-sweep]` behind the missing cells.
+1. **failed** — hunted `< GAPFILL_CELL_RETRY = 2` times and its only finding
+   failed Validate A on an *actionable* mechanical reason (bad line range, patch
+   does not apply, tautology). Ranked first so breadth does not starve it;
+   Feedback rewrites its prompt with the reason.
+2. **missing** — never hunted.
+3. **barren** — hunted `< GAPFILL_CELL_RETRY` times with no finding at all.
 
 Bounded at `GAPFILL_MAX_REQUEUE = 8` per invocation; only appends to
-`pending_hunts`. `missing` shrinks monotonically as cells get covered, so the
-loop converges. Logs `matrix / covered / missing / weak / requeued`.
+`pending_hunts`. Every bucket shrinks monotonically as cells get covered /
+retried, so the loop converges. Logs
+`matrix / covered / failed / missing / barren / requeued`.
 
 ### 4.3c `feedback.py` — Feedback (§11, issue #21)  · *done — deterministic trace analysis*
 
@@ -332,7 +336,7 @@ never a cap, a deny-list, or a continuation count):
 
 | Trigger | Signal | Addendum |
 |---|---|---|
-| `validation_failure` | a `mechanical_failed` finding for this attack class with an *actionable* reason (path/range/patch/schema — not the fail-closed PoC gate) | "cite exact file:line at the pinned commit; give a patch that applies clean" |
+| `validation_failure` | `coverage.actionable_mechanical_failures` (shared with Gapfill) has this attack class — a `mechanical_failed` finding with a path/range/patch/schema reason, not the fail-closed PoC gate | "cite exact file:line at the pinned commit; give a patch that applies clean" |
 | `shallow` | task `continuation_count ≥ 1`, or every coverage pass for the class was "no result emitted" | "run one trivial `sandbox_exec` first to confirm the sandbox; go deeper; do not return empty" |
 | `repeated_miss` | ≥ 2 prior passes for the class, zero findings | "name the guard that makes this safe, or escalate one concrete primitive with a PoC sketch" |
 
