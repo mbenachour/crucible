@@ -108,8 +108,8 @@ side effects (filesystem, stores, model calls, queue feedback).
 | `crucible/graph/build.py` | §4 topology + checkpointer + §11 producer–consumer loop | wired |
 | `crucible/graph/state.py` | §5 `CrucibleState` (pointers/counters only) | done |
 | `crucible/graph/hooks.py` | §7 offload/compaction, §8 continuation gate, §11 loop gate | gates done, offload stub |
-| `crucible/graph/nodes/recon.py` | §9.1 + issue #5 | **R0 seed + R3 decompose done; R1/R2 model steps wired** |
-| `crucible/recon/` | issue #5 — `seed.py` (R0), `decompose.py` (R3), `schema.py` | done (deterministic) |
+| `crucible/graph/nodes/recon.py` | §9.1 + issues #5, #34 | **re-engineered (#34): R0 seed → R1a orient (lead agent → ModuleMap) → R1b subsystem maps (parallel) → R1c synthesis → R2 → R3 (boundary-aware); `recon_quality ∈ {full,partial,seed_only}`** |
+| `crucible/recon/` | issues #5, #34 — `seed.py` (R0), `orient.py` (R1a partitioner), `synthesize.py` (R1c), `decompose.py` (R3 + 11-section `architecture.md`), `schema.py` | done (R1a/R1c/R3 deterministic) |
 | `crucible/graph/nodes/hunt.py` | §9.2 | wired — two-phase Hunter agent per cell (explore + forced `HuntResult` emit), per-task Docker sandbox exec, tautology deny-list at parse time, findings persisted with provenance, `coverage/<area>.md`; prompt-tuning for over-reporting owed (#3) |
 | `crucible/graph/nodes/validate_mechanical.py` | §9.4 Pass A | wired → `validation/mechanical.py`; loads finding from store, verdict persisted (funnel + Feedback signal) |
 | `crucible/graph/nodes/dedup.py` | §11 Dedup (issue #20) | **done — inverted-index shortlist + `VALIDATOR_BUG` judge; cross-run `stable_key` fold** |
@@ -130,7 +130,7 @@ side effects (filesystem, stores, model calls, queue feedback).
 | `crucible/sandbox/__init__.py` | §10 provider adapter protocol + policy | done |
 | `crucible/sandbox/docker.py` | §10 Docker dev backend (`DockerSandboxProvider`) | wired + smoke-tested (create/exec/destroy, ro source mount, `--network none`); escape-test suite (§14.7) still owed |
 | `crucible/store/` | §3 SQLite domain store (findings/validations/wishlist/tool-usage) | done |
-| `crucible/skills/` | §7 prompt files with `version:` front-matter | 28 attack-class methodologies (full builtin taxonomy, issue #16) + 2 validators + 3 recon; fixture tuning owed (#3) |
+| `crucible/skills/` | §7 prompt files with `version:` front-matter | 28 attack-class methodologies (full builtin taxonomy, issue #16) + 2 validators + 4 recon (`orient`/`map`/`threatmodel`/`decompose`); fixture tuning owed (#3) |
 | `tests/fixtures/repos/` | §12 golden fixtures + `bugs.yaml` manifests | fixture-c / -py / -clean / -holdout seeded |
 
 ## Two stores, deliberately (§3)
