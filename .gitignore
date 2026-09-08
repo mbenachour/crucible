@@ -8,6 +8,8 @@ __pycache__/
 checkpoints.sqlite*
 findings.sqlite*
 .crucible-workspace/
+.crucible-*/
+*-run.log
 .pytest_cache/
 .ruff_cache/
 *.o

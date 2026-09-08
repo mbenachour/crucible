@@ -98,14 +98,29 @@ checkpointer. Topology:
 
 ```
 START → recon → hunt ─┬─(continue)→ hunt        # bounded self-loop, §8
-                      └─(done)────→ validate_mechanical
+                      └─(done)────→ dedup
+                                 → validate_mechanical
+                                 → gapfill
+                                 → feedback
+                                 → loop_control ─┬─(rehunt)──→ hunt     # §11 loop
+                                                 └─(proceed)─→ validate_bug
                                  → validate_bug
                                  → validate_reachability
                                  → report → END
 ```
 
-- The `recon → hunt` edge is plain. The `hunt → hunt` / `hunt → validate_mechanical`
-  choice is a **conditional edge** driven by `continuation_gate` (see 3.3).
+- The `recon → hunt` edge is plain. The `hunt → hunt` / `hunt → dedup` choice is a
+  **conditional edge** driven by `continuation_gate` (see 3.3); the
+  `loop_control → hunt` / `loop_control → validate_bug` choice is a second
+  conditional edge driven by `loop_gate` (see 3.3, issue #22).
+- **Phase 2 producer–consumer loop (`specs.md` §11).** `dedup`, `gapfill`,
+  `feedback`, and `loop_control` turn the linear pipeline into a bounded loop:
+  Hunt output → Dedup folds overlaps → Validate A filters → Gapfill re-queues
+  under-tested cells → Feedback rewrites their prompts → `loop_control` runs
+  another cycle (up to `hooks.MAX_CYCLES`, env `CRUCIBLE_MAX_CYCLES`, default 2)
+  or falls through to the validate/report tail. Each cycle contains a full §8
+  bounded-continuation Hunt loop, so a bug found late is still deduped and
+  validated in the same run.
 - The three validate nodes are **separate nodes on purpose** (`specs.md` §1.7):
   "is this buggy?" and "can an attacker reach it?" are different questions asked of
   different models; each is narrower than the combined version.
@@ -143,7 +158,8 @@ and pushes content back into context.
 Harness mechanics kept deliberately out of prompt/agent logic.
 
 Constants: `CONTEXT_CEILING = 0.25` (§1.4) · `MAX_CONTINUATIONS = 3` (§8, hard
-cap) · `OFFLOAD_TOKEN_THRESHOLD = 2000` (§7).
+cap) · `OFFLOAD_TOKEN_THRESHOLD = 2000` (§7) · `MAX_CYCLES = 2`
+(env `CRUCIBLE_MAX_CYCLES`, §11 producer–consumer loop bound).
 
 - **`continuation_gate(state) -> "continue" | "done"`** — *done, unit-tested.*
   The bounded-continuation control (`specs.md` §8). Returns `"done"` when either
@@ -152,6 +168,12 @@ cap) · `OFFLOAD_TOKEN_THRESHOLD = 2000` (§7).
   explicit negatives against `architecture.md` entry points). The cap is a
   **safety control, not a cost control** — unbounded agent persistence was a named
   root cause of the July 2026 OpenAI incident.
+- **`should_rehunt(state) -> bool` / `loop_gate(state) -> "rehunt" | "proceed"`**
+  — *done (issue #22).* The outer producer–consumer bound: another cycle runs
+  only if Gapfill/Feedback left work queued **and** `cycle_count < MAX_CYCLES`.
+  Same fail-closed shape as `continuation_gate`. `graph_recursion_limit()`
+  derives the LangGraph super-step backstop from `MAX_CYCLES` +
+  `MAX_CONTINUATIONS`.
 - **`offload_and_compact(node_name, state) -> state`** — *stub.* The attach point
   for tool-output offloading (large output → `workspace/offload/<call_id>.txt`,
   model gets head+tail+path) and compaction (near the ceiling, summarise prior
@@ -248,12 +270,85 @@ killed by the PoC gate; (b) tautological test → killed by the deny-list; (c)
 exploit runs but the threat model is nonsense → killed by the `threat_model`
 requirement.
 
-### 4.3 `validate_mechanical.py` — Validate Pass A (§9.4)  · *wired → `validation/mechanical.py`*
+### 4.3 `validate_mechanical.py` — Validate Pass A (§9.4)  · *wired → `validation/mechanical.py`; persistence added for the Phase 2 loop*
 
 No model calls. Iterates `state["finding_ids"]`, calls
-`mechanical.check_finding(...)`, and (TODO) persists `status` + `reasons`. The
-cheapest filter, run first, so no model spend is wasted on a finding that cites a
-line that does not exist.
+`mechanical.check_finding(..., store=store)`, and **persists the verdict**:
+`FindingRow.status` → `mechanical_passed` / `mechanical_failed` plus a
+`ValidationRow(pass_name="mechanical")` with the accumulated reasons.
+`check_finding` now loads the `Finding` from the store (falling back to
+`findings/<id>.json`) instead of the old "finding not found" placeholder, so the
+deterministic gates (path/range, schema, `git apply --check`, non-empty PoC)
+actually run. **The PoC gate itself is still fail-closed** (`_check_poc_gate`
+returns `"poc_gate not implemented"` pending the sandbox exec path, issue #9) —
+so no finding reaches `mechanical_passed` yet, but the funnel and the reasons are
+real, which is what Feedback (issue #21) consumes. This is the *smallest* change
+that lets the §11 loop show a real funnel; it does **not** close issue #9.
+
+### 4.3a `dedup.py` — Dedup (§11, issue #20)  · *done — deterministic shortlist + agent judge*
+
+Runs on the `hunt → dedup` edge, before Validate A, so no model spend downstream
+is wasted on a duplicate. Two phases (`specs.md` §11):
+
+1. **Deterministic shortlist (no model).** Inverted indexes over *structured*
+   fields — cited `file_path`, normalised `threat_model.boundary_crossed`, and
+   rare description tokens (document-frequency-filtered). A pair is a candidate
+   if it shares the file bucket, or the boundary bucket **and** a rare token.
+   Bounded at `DEDUP_MAX_PAIRS = 40`, ranked by shared-bucket count. A cross-run
+   `stable_key` collision is an automatic duplicate — no model call.
+2. **Agent judge.** For the remaining shortlist, a `VALIDATOR_BUG`-model call
+   ([`skills/dedup/judge.md`](crucible/skills/dedup/judge.md), forced
+   `tool_choice=DupeJudgment`) decides whether *one fix at one root cause* closes
+   both. Bounded at `DEDUP_MAX_JUDGE = 12` calls.
+
+Duplicates are folded via `store.link_duplicate(dup, canonical)` (status →
+`duplicate`, `payload["duplicate_of"]` set — no schema migration) and dropped
+from `state["finding_ids"]`. Canonical selection prefers an earlier run, then the
+lexicographically smaller id. Cluster report → `workspace/dedup/clusters.json`.
+Degrades cleanly with no registry (deterministic `stable_key` folding only) or
+no store (skips).
+
+### 4.3b `gapfill.py` — Gapfill (§11, issue #19)  · *done — deterministic, no model*
+
+Runs after Validate A. Reconstructs Recon R3's intended `(area × attack_class)`
+matrix from `recon/task_manifest.json`, then classifies each cell against
+`state["completed_cells"]` and the parsed `coverage/<area>.md` blocks
+(`crucible/coverage.py`):
+
+- **missing** — never hunted → re-queued first;
+- **weak** — hunted, no finding, fewer than `GAPFILL_CELL_RETRY = 2` passes →
+  re-queued as `[gapfill re-sweep]` behind the missing cells.
+
+Bounded at `GAPFILL_MAX_REQUEUE = 8` per invocation; only appends to
+`pending_hunts`. `missing` shrinks monotonically as cells get covered, so the
+loop converges. Logs `matrix / covered / missing / weak / requeued`.
+
+### 4.3c `feedback.py` — Feedback (§11, issue #21)  · *done — deterministic trace analysis*
+
+Runs after Gapfill, over the freshly re-queued `pending_hunts`. For each queued
+cell it checks three trigger signals from this run's own trace and, if one
+fires, **appends** a `feedback:` addendum to `scope_hint` (and nothing else —
+never a cap, a deny-list, or a continuation count):
+
+| Trigger | Signal | Addendum |
+|---|---|---|
+| `validation_failure` | a `mechanical_failed` finding for this attack class with an *actionable* reason (path/range/patch/schema — not the fail-closed PoC gate) | "cite exact file:line at the pinned commit; give a patch that applies clean" |
+| `shallow` | task `continuation_count ≥ 1`, or every coverage pass for the class was "no result emitted" | "run one trivial `sandbox_exec` first to confirm the sandbox; go deeper; do not return empty" |
+| `repeated_miss` | ≥ 2 prior passes for the class, zero findings | "name the guard that makes this safe, or escalate one concrete primitive with a PoC sketch" |
+
+Bounded at `FEEDBACK_MAX_REWRITES = 6`; skips a prompt that already carries a
+`feedback:` note. The attack class is recovered from
+`FindingRow.hunter_prompt_version` (`"<class>@<ver>"`).
+
+### 4.3d `loop_control.py` — producer–consumer loop control (§11, issue #22)  · *done*
+
+Owns the outer bound. Increments `cycle_count`; if `hooks.should_rehunt` (work
+queued **and** `cycle_count < MAX_CYCLES`) it resets `continuation_count = 0` so
+the §8 continuation loop runs again for the re-queued cells, and `hooks.loop_gate`
+routes the conditional edge back to `hunt`. Otherwise control falls through to
+`validate_bug`. Every cycle is a full bounded-continuation Hunt loop, so the
+effective Hunt ceiling is `MAX_CYCLES × (MAX_CONTINUATIONS + 1)` batches — a
+second safety bound on top of the §8 cap, never a replacement for it.
 
 ### 4.4 `validate_bug.py` — Validate Pass B, "is it real?" (§9.4)  · *stub*
 
@@ -643,14 +738,21 @@ expectations; do not compare a C fixture's FP rate to a Python one.
    JSON); the tautology deny-list runs at parse time. Row inserted into `findings`
    with `status='raw'` and Hunter provenance. `coverage/<area>.md` updated.
    `continuation_gate` decides `continue` (fresh window, ≤3×) or `done`.
-4. **Validate A** (`mechanical.check_finding`): path/range, schema, patch dry-run,
-   PoC gate. Fail → `status='mechanical_failed'`, no model spent.
-5. **Validate B** (`VALIDATOR_BUG`, different model): re-reads, tries to disprove.
+4. **Dedup** (`specs.md` §11): deterministic inverted-index shortlist, then a
+   `VALIDATOR_BUG` judge on the shortlist; duplicates folded to a canonical
+   (`stable_key` across runs) and dropped from `finding_ids`.
+5. **Validate A** (`mechanical.check_finding`): path/range, schema, patch dry-run,
+   PoC gate (fail-closed). Verdict persisted → `status='mechanical_failed'` /
+   `'mechanical_passed'`, no model spent.
+6. **Gapfill / Feedback** (`specs.md` §11): re-queue under-tested cells, rewrite
+   their prompts from this run's failures; `loop_control` runs another cycle
+   (≤ `MAX_CYCLES`) or falls through.
+7. **Validate B** (`VALIDATOR_BUG`, different model): re-reads, tries to disprove.
    Response classified before parse. `ValidationRow(pass_name='bug',
    verdict=...)`. Finding → `bug_upheld` / `bug_refuted`.
-6. **Validate C** (`VALIDATOR_REACH`): attacker-input-to-sink path, single repo.
+8. **Validate C** (`VALIDATOR_REACH`): attacker-input-to-sink path, single repo.
    Finding → `reach_upheld` / `reach_refuted`.
-7. **Report**: deterministic select of `reach_upheld`, render `report.json` with
+9. **Report**: deterministic select of `reach_upheld`, render `report.json` with
    full provenance. No model.
 
 At any step an agent may `wishlist_write` a blocking dependency; that task is
@@ -658,16 +760,20 @@ re-runnable verbatim once the wish is resolved.
 
 ---
 
-## 15. Deferred components (Phase 2–4) and where they attach
+## 15. Deferred components (Phase 3–4) and where they attach
 
 Designed now, built when their absence is the specific blocker (`specs.md` §11,
-§15). All of them turn the linear pipeline into a **producer–consumer loop**.
+§15).
+
+**Phase 2 — shipped (issues #19–#22).** Gapfill, Dedup, Feedback, and the
+producer–consumer loop wiring are implemented and real-run verified (see §3.1,
+§4.3a–§4.3d). They turn the linear pipeline into a bounded loop around the
+existing Phase-1 tail; `validate_bug` / `validate_reachability` / `report`
+remain Phase-1 stubs, so a run still stops cleanly at `validate_bug` after the
+loop drains.
 
 | Component | Phase | Attaches | Role |
 |---|---|---|---|
-| **Gapfill** | 2 | re-queues into `pending_hunts` | re-runs under-tested `(area × attack_class)` cells; ~half the cost of the initial hunt; counteracts model drift toward classes it has already had success in |
-| **Dedup** | 2 | between Hunt and Validate A | deterministic inverted indexes (touched files/functions, trust boundary, rare tokens) → short candidate list → an agent judges whether one fix closes several; `stable_key` reopens records |
-| **Feedback** | 2 | rewrites queued prompts | consumes validation failures, shallow runs, repeated misses; LangChain lists trace self-analysis as an open research problem — Cloudflare ships it |
 | **Trace** | 3 | replaces Pass C | cross-repo reachability with a unified symbol index + dependency graph (Joern CPG) |
 | **VVS judgment** | 4 | after Report | production reachability, wiki/Jira/git context, applicability scoring |
 | **Fixer** | 4 | after VVS | automated patch + regression test; **human sign-off required before merge** |
@@ -691,10 +797,15 @@ exceeded 14) — per-PR needs a separate, cheaper, smaller harness.
 | `--checkpoint-db` | `cli run` | `SqliteSaver` path (execution state) |
 | `--store-url` | `cli status` | SQLAlchemy URL for `findings.sqlite` (domain state) |
 | `--workspace` | `cli run` | agent-writable working tree (default `.crucible-workspace`) |
+| `CRUCIBLE_MAX_CYCLES` | `hooks` | producer–consumer loop bound (§11, default 2) |
+| `CRUCIBLE_GAPFILL_MAX_REQUEUE` / `CRUCIBLE_GAPFILL_CELL_RETRY` | `gapfill` | cells re-queued per pass (8) / max passes before a weak cell is left alone (2) |
+| `CRUCIBLE_FEEDBACK_MAX_REWRITES` | `feedback` | queued prompts rewritten per pass (6) |
 
 Constants worth knowing: `hooks.MAX_CONTINUATIONS = 3`,
-`hooks.OFFLOAD_TOKEN_THRESHOLD = 2000`, `hooks.CONTEXT_CEILING = 0.25`,
-`classify.MAX_TRANSIENT_RETRIES = 3`, `recon.RECON_SUBAGENTS = 3`.
+`hooks.MAX_CYCLES = 2`, `hooks.OFFLOAD_TOKEN_THRESHOLD = 2000`,
+`hooks.CONTEXT_CEILING = 0.25`, `classify.MAX_TRANSIENT_RETRIES = 3`,
+`recon.RECON_SUBAGENTS = 3`, `dedup.DEDUP_MAX_PAIRS = 40`,
+`dedup.DEDUP_MAX_JUDGE = 12`.
 
 ---
 
@@ -750,8 +861,12 @@ Constants worth knowing: `hooks.MAX_CONTINUATIONS = 3`,
 | Continuation gate + cap | done, tested |
 | Response classification | done, tested |
 | Finding schema + tautology deny-list | done, tested |
-| Mechanical gates (path, schema, patch) | done |
-| PoC-gate execution | stub (fail-closed) — needs sandbox |
+| Mechanical gates (path, schema, patch) | done; loads finding from store, verdict persisted (funnel + Feedback signal) |
+| PoC-gate execution | stub (fail-closed) — needs sandbox (issue #9) |
+| Dedup (shortlist + agent judge, cross-run `stable_key`) | **done (issue #20)** |
+| Gapfill (re-queue under-tested `area × attack_class` cells) | **done (issue #19)** |
+| Feedback (rewrite queued prompts from failures / shallow / repeated miss) | **done (issue #21)** |
+| Producer–consumer loop (stages 4–8, bounded by `MAX_CYCLES`) | **done (issue #22)** |
 | Model registry + hunter≠validator assertion | done, tested |
 | Workspace layout + git-per-node | done |
 | Tool-output offloading | done, tested |

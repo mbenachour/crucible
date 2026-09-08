@@ -4,11 +4,13 @@ First-draft implementation of **Phase 1** from [`specs.md`](specs.md): the
 minimal harness — **Recon → Hunt → Validate → Report** on a database, with a
 separate validator that cannot file its own findings.
 
-This is scaffolding: the structure, state types, deterministic gates, model
-routing, schema, and instrumentation are real; the model-facing node bodies
-(`recon`, `hunt`, `validate_bug`, `validate_reachability`) and the sandbox and
-PoC-gate execution paths are `NotImplementedError` stubs with the spec
-requirements written into their docstrings and `TODO(phase1)` markers.
+The structure, state types, deterministic gates, model routing, schema, and
+instrumentation are real; `recon` and `hunt` are real two-phase agents. The
+**Phase 2** producer–consumer loop — Dedup, Gapfill, Feedback, and the loop
+wiring (§11, issues #19–#22) — is implemented and real-run verified. Still
+`NotImplementedError` stubs: `validate_bug`, `validate_reachability`, `report`,
+and the sandbox PoC-gate execution path — so a run drains the loop and then
+stops cleanly at `validate_bug` (exit 3).
 
 ## Architecture
 
@@ -18,11 +20,11 @@ checkpointed — it survives a crash and resumes. Each **agent stage** is a
 filesystem — large artifacts never travel through model context or the DB (§1.1).
 
 The diagram is the **whole harness across all four build phases**. Solid blue is
-**Phase 1** (this scaffold): Recon → Hunt → Validate → Report. Dashed nodes are
-designed-now / built-later: <span title="Phase 2">Gapfill · Dedup · Feedback</span>
-(§11), cross-repo Trace (§3 P3), VVS judgment + human-gated Fixer (§2 P4). The
-Phase-2+ stages turn Report into a **producer–consumer loop** — a bug found late in
-a cycle is still validated, reported, and deduped in the same run (§11).
+**Phase 1**: Recon → Hunt → Validate → Report. **Phase 2** (§11, issues #19–#22)
+is now built: <span title="Phase 2">Gapfill · Dedup · Feedback · loop_control</span>
+turn the pipeline into a bounded **producer–consumer loop** — a bug found late in
+a cycle is still deduped and validated in the same run. Still dashed / built-later:
+cross-repo Trace (§3 P3), VVS judgment + human-gated Fixer (§2 P4).
 
 ```mermaid
 flowchart TB
@@ -103,13 +105,18 @@ side effects (filesystem, stores, model calls, queue feedback).
 
 | Path | Spec | Status |
 |---|---|---|
-| `crucible/graph/build.py` | §4 topology + checkpointer | wired |
+| `crucible/graph/build.py` | §4 topology + checkpointer + §11 producer–consumer loop | wired |
 | `crucible/graph/state.py` | §5 `CrucibleState` (pointers/counters only) | done |
-| `crucible/graph/hooks.py` | §7 offload/compaction, §8 continuation gate | gate done, offload stub |
+| `crucible/graph/hooks.py` | §7 offload/compaction, §8 continuation gate, §11 loop gate | gates done, offload stub |
 | `crucible/graph/nodes/recon.py` | §9.1 + issue #5 | **R0 seed + R3 decompose done; R1/R2 model steps wired** |
 | `crucible/recon/` | issue #5 — `seed.py` (R0), `decompose.py` (R3), `schema.py` | done (deterministic) |
 | `crucible/graph/nodes/hunt.py` | §9.2 | wired — two-phase Hunter agent per cell (explore + forced `HuntResult` emit), per-task Docker sandbox exec, tautology deny-list at parse time, findings persisted with provenance, `coverage/<area>.md`; prompt-tuning for over-reporting owed (#3) |
-| `crucible/graph/nodes/validate_mechanical.py` | §9.4 Pass A | wired → `validation/mechanical.py` |
+| `crucible/graph/nodes/validate_mechanical.py` | §9.4 Pass A | wired → `validation/mechanical.py`; loads finding from store, verdict persisted (funnel + Feedback signal) |
+| `crucible/graph/nodes/dedup.py` | §11 Dedup (issue #20) | **done — inverted-index shortlist + `VALIDATOR_BUG` judge; cross-run `stable_key` fold** |
+| `crucible/graph/nodes/gapfill.py` | §11 Gapfill (issue #19) | **done — deterministic re-queue of under-tested `area × attack_class` cells** |
+| `crucible/graph/nodes/feedback.py` | §11 Feedback (issue #21) | **done — rewrites queued prompts from validation failures / shallow / repeated miss** |
+| `crucible/graph/nodes/loop_control.py` | §11 loop wiring (issue #22) | **done — bounded producer–consumer cycles (`CRUCIBLE_MAX_CYCLES`, default 2)** |
+| `crucible/coverage.py` | §11/§12 `(area × attack_class)` coverage bookkeeping | done (deterministic) |
 | `crucible/graph/nodes/validate_bug.py` | §9.4 Pass B | stub |
 | `crucible/graph/nodes/validate_reachability.py` | §9.4 Pass C | stub |
 | `crucible/graph/nodes/report.py` | §9.5 deterministic render | stub |
@@ -201,11 +208,19 @@ crucible run --repo <path-to-target-checkout>
 | `--resume <run_id>` | — | continue a run from its last checkpoint |
 | `--no-sandbox` | off | skip the Docker boot check (nodes needing exec will fail) |
 
-Phase 1 status: Recon and Hunt are implemented; Validate (bug/reach) and Report
-are stubs, so a run exits at `stopped at stub node: validate_bug` (code 3) after
-Hunt writes `coverage/`, any `findings/`, and checkpoints. Hunt needs a Hunter
-model that is actually reachable — set `HUNTER_LLM=deepseek` (or pull the Ollama
-default) alongside `RECON_LLM`.
+| Env | Default | Meaning |
+|---|---|---|
+| `CRUCIBLE_MAX_CYCLES` | `2` | Phase 2 producer–consumer loop bound (§11) |
+| `CRUCIBLE_GAPFILL_MAX_REQUEUE` | `8` | cells Gapfill re-queues per cycle |
+| `CRUCIBLE_FEEDBACK_MAX_REWRITES` | `6` | queued prompts Feedback rewrites per cycle |
+
+Status: Recon and Hunt are implemented; the Phase 2 loop (Dedup → validate A →
+Gapfill → Feedback → `loop_control`) runs continuously, bounded by
+`CRUCIBLE_MAX_CYCLES`. Validate (bug/reach) and Report are still stubs, so a run
+drains the loop and then exits at `stopped at stub node: validate_bug` (code 3),
+having written `coverage/`, `dedup/clusters.json`, any `findings/`, and
+checkpoints. Hunt needs a reachable Hunter model — set `HUNTER_LLM=deepseek` (or
+pull the Ollama default) alongside `RECON_LLM`.
 
 ### Logs & tracing
 
@@ -273,7 +288,8 @@ pytest tests/test_cli.py -v      # CLI smoke: help, status, run-to-stub
 10. fork rate + per-tool counts in `crucible status`
 11. prompt changes regression-tested against `fixture-holdout`
 
-## Not in this draft (Phase 0 and Phase 2+)
+## Not in this draft (Phase 0 and Phase 3+)
 
-Phase 0's single-session `security-audit` skill (§2), and Gapfill / Dedup /
-Feedback / cross-repo Trace / VVS / Fixer (§11, §15).
+Phase 0's single-session `security-audit` skill (§2); cross-repo Trace, VVS, and
+the human-gated Fixer (§15). Phase 2 (Gapfill / Dedup / Feedback / loop wiring,
+§11) **is** built — issues #19–#22.
