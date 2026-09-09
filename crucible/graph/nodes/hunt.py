@@ -290,13 +290,18 @@ def _explore(
 
 
 def _emit(model, system_prompt: str, task_text: str, digest: str) -> HuntResult | None:
-    """Phase B — one forced structured emission from the gathered context. Fresh
-    message list (no tool-call history) keeps the request well-formed;
-    `tool_choice` forces the single call we parse. One repair retry."""
-    from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+    """Phase B — one forced structured emission from the gathered context.
+
+    Each attempt is a **fresh** two-message request (system + human, no
+    tool-call history). Never append the model's `tool_calls` turn + a partial
+    set of `ToolMessage`s — a strict OpenAI-compatible backend (DeepSeek) 400s
+    with "insufficient tool messages following tool_calls message" on the next
+    call. The repair signal rides in a new `HumanMessage` instead.
+    """
+    from langchain_core.messages import HumanMessage, SystemMessage
 
     name = HuntResult.__name__
-    ask = (
+    base_ask = (
         f"{task_text}\n\n"
         f"--- evidence gathered while hunting ---\n{digest or '(no tools used)'}\n\n"
         f"Now call the `{name}` tool exactly once with your final result. Set "
@@ -305,25 +310,33 @@ def _emit(model, system_prompt: str, task_text: str, digest: str) -> HuntResult 
         f"Field order is load-bearing — commit to the threat model first."
     )
     bound = model.bind_tools([HuntResult], tool_choice=name)
-    msgs: list = [SystemMessage(content=system_prompt), HumanMessage(content=ask)]
     err = "model did not call the emit tool"
-    for _ in range(2):
-        out = bound.invoke(msgs)
+    ask = base_ask
+    for attempt in range(2):
+        try:
+            out = bound.invoke([
+                SystemMessage(content=system_prompt), HumanMessage(content=ask),
+            ])
+        except Exception as e:  # noqa: BLE001 — provider 400 etc; retry once, then give up
+            err = f"{type(e).__name__}: {str(e).splitlines()[0]}"
+            if attempt == 0:
+                continue
+            break
         calls = getattr(out, "tool_calls", None) or []
         call = next((c for c in calls if c["name"] == name), calls[0] if calls else None)
         if call is None:
-            break
+            err = "model did not call the emit tool"
+            ask = f"{base_ask}\n\nYou did not call `{name}`. Call it now, exactly once."
+            continue
         try:
             return HuntResult.model_validate(call["args"])
         except ValidationError as e:
             err = str(e).splitlines()[0]
-            msgs = [
-                *msgs, out,
-                ToolMessage(
-                    content=f"That did not validate: {err}. Call `{name}` again with corrected fields.",
-                    tool_call_id=call.get("id", ""), name=name,
-                ),
-            ]
+            ask = (
+                f"{base_ask}\n\nYour previous `{name}` call failed schema "
+                f"validation: {err}\nReturn a corrected call — same evidence, "
+                f"fixed fields."
+            )
     log.warning("hunt emit failed: %s", err)
     return None
 

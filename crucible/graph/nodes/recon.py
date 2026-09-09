@@ -487,39 +487,51 @@ def _digest(messages: list, *, budget: int = 20_000) -> str:
 
 
 def _emit(model, system_prompt: str, task_text: str, digest: str, schema):
-    """Phase B — one forced structured emission from the gathered context. A
-    fresh message list (no tool-call history) keeps the request well-formed;
-    `tool_choice=<schema>` forces the single call we parse. One repair retry."""
-    from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+    """Phase B — one forced structured emission from the gathered context.
+
+    Each attempt is a **fresh** two-message request (system + human, no
+    tool-call history). Never append the model's `tool_calls` turn + a partial
+    set of `ToolMessage`s — a strict OpenAI-compatible backend (DeepSeek) 400s
+    with "insufficient tool messages following tool_calls message" on the next
+    call. The repair signal rides in a new `HumanMessage` instead.
+    """
+    from langchain_core.messages import HumanMessage, SystemMessage
     from pydantic import ValidationError
 
     name = schema.__name__
-    ask = (
+    base_ask = (
         f"{task_text}\n\n"
         f"--- notes gathered while reading the repo ---\n{digest or '(no files read)'}\n\n"
         f"Now call the `{name}` tool exactly once with your final answer, based on "
         f"the notes above and the seed facts. Accurate partial content is fine."
     )
     bound = model.bind_tools([schema], tool_choice=name)
-    msgs: list = [SystemMessage(content=system_prompt), HumanMessage(content=ask)]
     err = "model did not call the emit tool"
-    for _ in range(2):
-        out = bound.invoke(msgs)
+    ask = base_ask
+    for attempt in range(2):
+        try:
+            out = bound.invoke([
+                SystemMessage(content=system_prompt), HumanMessage(content=ask),
+            ])
+        except Exception as e:  # noqa: BLE001 — provider 400 etc; retry once, then raise
+            err = f"{type(e).__name__}: {str(e).splitlines()[0]}"
+            if attempt == 0:
+                continue
+            break
         calls = getattr(out, "tool_calls", None) or []
         call = next((c for c in calls if c["name"] == name), calls[0] if calls else None)
         if call is None:
-            break
+            err = "model did not call the emit tool"
+            ask = f"{base_ask}\n\nYou did not call `{name}`. Call it now, exactly once."
+            continue
         try:
             return schema.model_validate(call["args"])
         except ValidationError as e:
             err = str(e).splitlines()[0]
-            msgs = [
-                *msgs, out,
-                ToolMessage(
-                    content=f"That did not validate: {err}. Call `{name}` again with corrected fields.",
-                    tool_call_id=call.get("id", ""), name=name,
-                ),
-            ]
+            ask = (
+                f"{base_ask}\n\nYour previous `{name}` call failed schema "
+                f"validation: {err}\nReturn a corrected call — same content, fixed fields."
+            )
     raise RuntimeError(f"structured emit failed: {err}")
 
 
