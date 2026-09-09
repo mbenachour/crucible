@@ -30,7 +30,7 @@ def run(
     workspace: Path = typer.Option(Path(".crucible-workspace"), "--workspace"),
     checkpoint_db: Path = typer.Option(Path("checkpoints.sqlite"), "--checkpoint-db"),
     store_url: str = typer.Option("sqlite:///findings.sqlite", "--store-url"),
-    config: str = typer.Option("", "--config", help="path to crucible.toml"),
+    config: str = typer.Option("", "--config", help="path to config.yaml or crucible.toml"),
     resume: str = typer.Option("", "--resume", help="run_id to resume from checkpoint"),
     no_sandbox: bool = typer.Option(False, "--no-sandbox", help="skip Docker sandbox boot check"),
     stop_after: str = typer.Option(
@@ -48,7 +48,7 @@ def run(
     import time
 
     _load_dotenv()
-    from crucible.config import load_registry
+    from crucible.config import apply_file_tracing_env, load_registry
     from crucible.graph.build import STAGE_NODES, StopAfterStage, build_graph
     from crucible.graph.deps import NodeDeps
     from crucible.llm.registry import ModelRole
@@ -67,7 +67,8 @@ def run(
     init_workspace(workspace)
 
     log = configure_logging(workspace)
-    setup_tracing()  # opt-in via CRUCIBLE_OTEL / OTEL_EXPORTER_OTLP_ENDPOINT
+    apply_file_tracing_env(config or None)  # config.yaml `tracing:` -> env (env still wins)
+    setup_tracing()  # opt-in via CRUCIBLE_OTEL / OTEL_EXPORTER_OTLP_ENDPOINT / LangSmith
     started = time.monotonic()
 
     registry = load_registry(config or None)

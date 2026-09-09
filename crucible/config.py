@@ -2,23 +2,36 @@
 
 Resolution order (lowest to highest precedence):
   1. `DEFAULT_ENDPOINTS` below
-  2. a TOML file (``crucible.toml`` or ``--config PATH``), ``[models.<role>]`` tables
+  2. a file config — ``crucible.toml`` then ``config.yaml`` (both auto-discovered
+     in the CWD; YAML wins where they overlap), or an explicit ``--config PATH``
+     (format by suffix: ``.yaml`` / ``.yml`` -> YAML, else TOML)
   3. environment variables (see `ModelRegistry.from_env`)
 
-Wired providers: ``ollama`` (local) and ``deepseek`` (hosted, OpenAI-compatible;
-needs ``DEEPSEEK_API_KEY`` or ``[models.<role>] api_key``). The default models
-are Ollama and chosen so that HUNTER and VALIDATOR_BUG are **different lineages**
-(the §6 assertion). Pull them first, e.g.::
+**Secrets never come from the file** — API keys (``OPENROUTER_API_KEY``,
+``DEEPSEEK_API_KEY``, ``LANGSMITH_API_KEY``) are read from the environment / a
+gitignored ``.env`` only. The file carries non-secret routing and toggles.
+
+Wired providers: ``ollama`` (local), ``deepseek`` (hosted, OpenAI-compatible;
+needs ``DEEPSEEK_API_KEY``) and ``openrouter`` (one key for any hosted model —
+the "model matrix"; needs ``OPENROUTER_API_KEY`` and a per-role model id). The
+default models are Ollama and chosen so that HUNTER and VALIDATOR_BUG are
+**different lineages** (the §6 assertion). Pull them first, e.g.::
 
     ollama pull qwen2.5-coder:7b
     ollama pull llama3.1:8b
 
-Example ``crucible.toml`` putting DeepSeek in the Hunter slot::
+Example ``config.yaml`` — the model matrix on OpenRouter plus tracing toggles::
 
-    [models.hunter]
-    provider = "deepseek"
-    model = "deepseek-chat"
-    # api_key via DEEPSEEK_API_KEY env
+    models:
+      recon:          { provider: openrouter, model: qwen/qwen-2.5-coder-32b-instruct }
+      hunter:         { provider: openrouter, model: anthropic/claude-sonnet-4 }
+      validator_bug:  { provider: openrouter, model: openai/gpt-4o }
+      validator_reach:{ provider: openrouter, model: google/gemini-2.0-flash }
+    tracing:
+      langsmith: { enabled: true, project: crucible }   # LANGSMITH_API_KEY from .env
+      otel:      { enabled: false, endpoint: http://localhost:4318 }
+
+The equivalent ``crucible.toml`` still works (``[models.hunter] provider = ...``).
 """
 
 from __future__ import annotations
@@ -26,9 +39,9 @@ from __future__ import annotations
 import os
 import tomllib
 from pathlib import Path
+from typing import Any
 
 from crucible.llm.registry import (
-    DEFAULT_OLLAMA_BASE_URL,
     ModelEndpoint,
     ModelRegistry,
     ModelRole,
@@ -65,12 +78,36 @@ RECON_MAX_PARALLEL = max(1, int(os.environ.get("CRUCIBLE_RECON_MAX_PARALLEL", "4
 RECON_ORIENT_READ_BUDGET = max(4, int(os.environ.get("CRUCIBLE_RECON_ORIENT_BUDGET", "24")))
 
 
-def _apply_toml(endpoints: dict[ModelRole, ModelEndpoint], path: Path) -> dict[ModelRole, ModelEndpoint]:
-    data = tomllib.loads(path.read_text())
-    models = data.get("models", {})
+# Auto-discovered in the CWD when no --config is given, applied in this order
+# (so a value in config.yaml wins over the same value in crucible.toml).
+_AUTO_CONFIG_NAMES = ("crucible.toml", "config.yaml", "config.yml")
+
+
+def _read_config_file(path: Path) -> dict[str, Any]:
+    """Parse a config file to a plain dict. YAML for ``.yaml`` / ``.yml``,
+    TOML otherwise. Non-secret config only — secrets stay in the environment."""
+    text = path.read_text()
+    if path.suffix.lower() in (".yaml", ".yml"):
+        import yaml  # pyyaml is a hard dependency
+
+        return yaml.safe_load(text) or {}
+    return tomllib.loads(text)
+
+
+def _config_paths(config_path: str | os.PathLike | None) -> list[Path]:
+    """Explicit --config wins outright; otherwise the auto-discovered set."""
+    if config_path:
+        p = Path(config_path)
+        return [p] if p.is_file() else []
+    return [p for name in _AUTO_CONFIG_NAMES if (p := Path(name)).is_file()]
+
+
+def _apply_models(
+    endpoints: dict[ModelRole, ModelEndpoint], models: dict[str, Any] | None
+) -> dict[ModelRole, ModelEndpoint]:
     out = dict(endpoints)
     for role in ModelRole:
-        tbl = models.get(role.value)
+        tbl = (models or {}).get(role.value)
         if not tbl:
             continue
         cur = out[role]
@@ -91,9 +128,32 @@ def _apply_toml(endpoints: dict[ModelRole, ModelEndpoint], path: Path) -> dict[M
 
 
 def load_registry(config_path: str | os.PathLike | None = None) -> ModelRegistry:
-    """DEFAULT_ENDPOINTS -> TOML (if present) -> env overrides -> ModelRegistry."""
+    """DEFAULT_ENDPOINTS -> file config (yaml/toml) -> env overrides -> registry."""
     endpoints = dict(DEFAULT_ENDPOINTS)
-    path = Path(config_path) if config_path else Path("crucible.toml")
-    if path.is_file():
-        endpoints = _apply_toml(endpoints, path)
+    for path in _config_paths(config_path):
+        endpoints = _apply_models(endpoints, _read_config_file(path).get("models"))
     return ModelRegistry.from_env(defaults=endpoints)
+
+
+def apply_file_tracing_env(config_path: str | os.PathLike | None = None) -> None:
+    """Fold a config file's ``tracing:`` block into ``os.environ`` (via
+    ``setdefault``, so a real env var / ``.env`` value always wins) so that
+    `crucible.obs.setup_tracing` — which only reads env — picks it up.
+
+    API keys are never taken from the file; ``LANGSMITH_API_KEY`` still must be
+    set in the environment for LangSmith export to actually run.
+    """
+    for path in _config_paths(config_path):
+        tracing = _read_config_file(path).get("tracing") or {}
+        ls = tracing.get("langsmith") or {}
+        if ls.get("enabled"):
+            os.environ.setdefault("LANGSMITH_TRACING", "true")
+        if ls.get("project"):
+            os.environ.setdefault("LANGSMITH_PROJECT", str(ls["project"]))
+        if ls.get("endpoint"):
+            os.environ.setdefault("LANGSMITH_ENDPOINT", str(ls["endpoint"]))
+        otel = tracing.get("otel") or {}
+        if otel.get("enabled"):
+            os.environ.setdefault("CRUCIBLE_OTEL", "1")
+        if otel.get("endpoint"):
+            os.environ.setdefault("OTEL_EXPORTER_OTLP_ENDPOINT", str(otel["endpoint"]))

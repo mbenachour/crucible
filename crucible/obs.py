@@ -2,7 +2,11 @@
 
 1. **Logging** — always on. Console (INFO) + a per-run file at
    ``<workspace>/run.log`` (DEBUG). `configure_logging()` is called once by the
-   CLI; library modules just use ``logging.getLogger(__name__)``.
+   CLI; library modules just use ``logging.getLogger(__name__)``. On an
+   interactive stderr the console handler is a `rich` one that shares its render
+   lock with `progress()` bars; piped / in CI it is a plain stream handler.
+   `progress(title, total)` yields a bar that stages drive with `set()` / `tick()`
+   and is a no-op off-TTY or under ``CRUCIBLE_NO_PROGRESS``.
 
 2. **Tracing** — opt-in, three modes chosen by env (`setup_tracing()`):
 
@@ -24,10 +28,40 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import sys
 from pathlib import Path
 
 LOGGER_NAME = "crucible"
 _TRACING_ENABLED = False
+_CONSOLE = None
+
+
+# --------------------------------------------------------------------- console
+
+def console():
+    """Shared `rich` console on **stderr** (stdout stays clean for `typer.echo`
+    output that gets piped). Lazily created, reused for logging + progress bars
+    so they share one render lock and never corrupt each other's output."""
+    global _CONSOLE
+    if _CONSOLE is None:
+        from rich.console import Console
+
+        _CONSOLE = Console(stderr=True)
+    return _CONSOLE
+
+
+def _stderr_is_tty() -> bool:
+    try:
+        return bool(sys.stderr.isatty())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def progress_enabled() -> bool:
+    """Progress bars only on an interactive stderr, and only if not opted out."""
+    return _stderr_is_tty() and os.environ.get("CRUCIBLE_NO_PROGRESS", "").strip().lower() not in (
+        "1", "true", "yes", "on",
+    )
 
 
 # --------------------------------------------------------------------- logging
@@ -40,10 +74,33 @@ def configure_logging(workspace_path: str | os.PathLike | None = None, *, level:
     logger.handlers.clear()
     logger.propagate = False
 
-    console = logging.StreamHandler()
-    console.setLevel(lvl)
-    console.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s  %(message)s", "%H:%M:%S"))
-    logger.addHandler(console)
+    console_handler: logging.Handler
+    if _stderr_is_tty():
+        try:
+            from rich.logging import RichHandler
+
+            # RichHandler renders its own time + level columns and shares the
+            # console lock with progress bars, so log lines and bars interleave
+            # cleanly instead of scribbling over each other.
+            console_handler = RichHandler(
+                console=console(),
+                show_path=False,
+                rich_tracebacks=False,
+                markup=False,
+                log_time_format="%H:%M:%S",
+            )
+        except Exception:  # noqa: BLE001 — rich missing/broken: fall back to plain
+            console_handler = logging.StreamHandler()
+            console_handler.setFormatter(
+                logging.Formatter("%(asctime)s %(levelname)-7s %(name)s  %(message)s", "%H:%M:%S")
+            )
+    else:
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)-7s %(name)s  %(message)s", "%H:%M:%S")
+        )
+    console_handler.setLevel(lvl)
+    logger.addHandler(console_handler)
 
     if workspace_path:
         log_path = Path(workspace_path) / "run.log"
@@ -56,6 +113,63 @@ def configure_logging(workspace_path: str | os.PathLike | None = None, *, level:
         logger.addHandler(fh)
 
     return logger
+
+
+# --------------------------------------------------------------------- progress
+
+class _Bar:
+    """Thin handle a stage uses to drive one progress bar. `set()` names the
+    item about to be worked; `tick()` marks it done. Both are no-ops when
+    progress bars are off — the stage's own log lines carry the detail then."""
+
+    __slots__ = ("_set", "_tick")
+
+    def __init__(self, on_set, on_tick):
+        self._set, self._tick = on_set, on_tick
+
+    def set(self, description: str) -> None:
+        self._set(description)
+
+    def tick(self, advance: int = 1) -> None:
+        self._tick(advance)
+
+
+@contextlib.contextmanager
+def progress(title: str, total: int):
+    """Yield a `_Bar` for a stage that processes `total` items.
+
+    On an interactive stderr this is a live `rich` bar; piped / in CI / with
+    ``CRUCIBLE_NO_PROGRESS`` set it degrades to nothing (callers still log).
+    """
+    if not progress_enabled() or total <= 0:
+        yield _Bar(lambda _desc: None, lambda _adv: None)
+        return
+
+    try:
+        from rich.progress import (
+            BarColumn,
+            MofNCompleteColumn,
+            Progress,
+            TextColumn,
+            TimeElapsedColumn,
+        )
+    except Exception:  # noqa: BLE001
+        yield _Bar(lambda _desc: None, lambda _adv: None)
+        return
+
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=console(),
+        transient=True,
+    ) as prog:
+        task_id = prog.add_task(title, total=total)
+        yield _Bar(
+            lambda desc: prog.update(task_id, description=desc),
+            lambda adv: prog.update(task_id, advance=adv),
+        )
 
 
 # --------------------------------------------------------------------- tracing

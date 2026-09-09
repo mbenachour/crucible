@@ -1,0 +1,44 @@
+# Crucible configuration — copy to `config.yaml` (gitignored) and edit.
+#
+# NON-SECRET config only. API keys stay in the environment / a gitignored `.env`:
+#   OPENROUTER_API_KEY, DEEPSEEK_API_KEY, LANGSMITH_API_KEY
+#
+# Precedence (low -> high): built-in defaults  <  crucible.toml  <  config.yaml
+#                           <  environment variables
+# `crucible run --config <path>` overrides auto-discovery (format by suffix).
+
+# --- Model matrix: one model per agent role --------------------------------
+# provider: ollama | deepseek | openrouter   (openai/vllm reserved, not wired)
+# An `openrouter` role MUST name its `model` — there is no default.
+# Hunter and validator_bug models MUST differ (specs.md §6).
+models:
+  recon:
+    provider: openrouter
+    model: qwen/qwen-2.5-coder-32b-instruct
+    temperature: 0.1
+    num_ctx: 16384
+  hunter:
+    provider: openrouter
+    model: anthropic/claude-sonnet-4
+    temperature: 0.3
+  validator_bug:
+    provider: openrouter
+    model: openai/gpt-4o
+    temperature: 0.1
+  validator_reach:
+    provider: openrouter
+    model: google/gemini-2.0-flash
+    temperature: 0.1
+  # base_url: optional; omit to use the provider default
+  #   (openrouter -> https://openrouter.ai/api/v1, ollama -> localhost:11434)
+
+# --- Tracing toggles (specs.md §13) ---------------------------------------
+# Enables spans; the API key itself is still read from the environment.
+tracing:
+  langsmith:
+    enabled: false
+    project: crucible
+    # endpoint: https://api.smith.langchain.com   # or eu./apac.
+  otel:
+    enabled: false
+    endpoint: http://localhost:4318

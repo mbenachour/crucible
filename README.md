@@ -161,8 +161,9 @@ crucible --help
 ### Models
 
 Provider-configurable via `crucible/llm/registry.py`. Wired providers: `ollama`
-(local, default) and `deepseek` (hosted, OpenAI-compatible). Defaults use Ollama
-with **different lineages** for hunter vs validator (the §6 assertion):
+(local, default), `deepseek` (hosted, OpenAI-compatible) and `openrouter` (one
+key, any hosted model — the model matrix). Defaults use Ollama with **different
+lineages** for hunter vs validator (the §6 assertion):
 
 ```bash
 ollama serve
@@ -171,26 +172,36 @@ ollama pull llama3.1:8b          # validators
 ```
 
 Override per role, highest precedence last: `crucible/config.py` defaults →
-`crucible.toml` → env vars.
+`crucible.toml` → `config.yaml` → env vars.
 
-```toml
-# crucible.toml — put a hosted model in the Hunter slot
-[models.hunter]
-provider = "deepseek"
-model    = "deepseek-chat"       # api key via DEEPSEEK_API_KEY
+**`config.yaml`** (recommended — `cp config.yaml.example config.yaml`, gitignored)
+carries the whole model matrix plus tracing toggles. Non-secret only; API keys
+stay in `.env`.
+
+```yaml
+# config.yaml — one model per role, all on OpenRouter
+models:
+  recon:          { provider: openrouter, model: qwen/qwen-2.5-coder-32b-instruct }
+  hunter:         { provider: openrouter, model: anthropic/claude-sonnet-4 }
+  validator_bug:  { provider: openrouter, model: openai/gpt-4o }          # != hunter (§6)
+  validator_reach:{ provider: openrouter, model: google/gemini-2.0-flash }
+tracing:
+  langsmith: { enabled: true, project: crucible }   # LANGSMITH_API_KEY from .env
 ```
+
+A role routed to `openrouter` MUST name its `model` — there is no silent default.
+`crucible.toml` (`[models.hunter] provider = "..."`) still works; `config.yaml`
+wins where both set the same value.
 
 ```bash
-# or by env. `<ROLE>_LLM` is the short provider alias; CRUCIBLE_PROVIDER_<ROLE> wins.
-export RECON_LLM=deepseek                    # ollama | deepseek | openai (openai reserved)
-export DEEPSEEK_MODEL=deepseek-v4-flash      # default model for any deepseek role
-export DEEPSEEK_API_KEY=sk-...
-export CRUCIBLE_MODEL_HUNTER=deepseek-v4-pro # per-role model (wins over DEEPSEEK_MODEL)
+# every value is also settable by env, which overrides the file.
+export RECON_LLM=openrouter                  # ollama | deepseek | openrouter | openai (openai reserved)
+export CRUCIBLE_MODEL_RECON=qwen/qwen-2.5-coder-32b-instruct
 ```
 
-Secrets and overrides: a `.env` at the repo root (gitignored; loaded automatically
-by `crucible run` / `status`) — e.g. `DEEPSEEK_API_KEY=sk-...`,
-`DEEPSEEK_MODEL=deepseek-v4-flash`, `RECON_LLM=deepseek`.
+Secrets: a `.env` at the repo root (gitignored; loaded automatically by
+`crucible run` / `status`) — `OPENROUTER_API_KEY=sk-or-...`,
+`DEEPSEEK_API_KEY=sk-...`, `LANGSMITH_API_KEY=...`.
 
 ### Run
 
@@ -204,7 +215,7 @@ crucible run --repo <path-to-target-checkout>
 | `--workspace` | `.crucible-workspace` | agent-writable, git-initialised working tree |
 | `--checkpoint-db` | `checkpoints.sqlite` | LangGraph execution state (resume) |
 | `--store-url` | `sqlite:///findings.sqlite` | domain store (findings, validations, tool usage) |
-| `--config` | `crucible.toml` | model config file |
+| `--config` | auto (`config.yaml` / `crucible.toml`) | model + tracing config file (format by suffix) |
 | `--resume <run_id>` | — | continue a run from its last checkpoint |
 | `--stop-after <stage>` | — | stop cleanly after the named stage (`recon`, `hunt`, `dedup`, …) completes; resume with `--resume <run_id>` |
 | `--no-sandbox` | off | skip the Docker boot check (nodes needing exec will fail) |

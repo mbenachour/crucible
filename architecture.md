@@ -454,14 +454,17 @@ deny-list hits (empty = accepted):
 ### 6.1 `registry.py` — model routing + the core assertion  · *done*
 
 - **`ModelRole`** enum: `RECON`, `HUNTER`, `VALIDATOR_BUG`, `VALIDATOR_REACH`.
-- **`Provider`** enum: `ollama` (local, `langchain-ollama`) and `deepseek`
-  (hosted, OpenAI-compatible, `langchain-deepseek`) are **wired**; `vllm` /
+- **`Provider`** enum: `ollama` (local, `langchain-ollama`), `deepseek` (hosted,
+  OpenAI-compatible, `langchain-deepseek`) and `openrouter` (hosted aggregator,
+  OpenAI-compatible, `langchain-openai` → `ChatOpenAI` at
+  `https://openrouter.ai/api/v1`) are **wired**; `openai` / `vllm` /
   `openai_compat` are reserved and raise from `chat_model` until built.
 - **`ModelEndpoint`** dataclass (frozen): `role`, `model` (provider-native name —
-  an Ollama tag or `deepseek-chat`), `provider`, `base_url` (`""` → the
-  provider's default), `api_key` (optional; falls back to `DEEPSEEK_API_KEY`),
-  `temperature`, `top_p`, `num_ctx` (ollama), `num_predict` (→ `max_tokens` for
-  OpenAI-compatible providers), `seed`, `extra`.
+  an Ollama tag, `deepseek-chat`, or an OpenRouter id like
+  `anthropic/claude-sonnet-4`), `provider`, `base_url` (`""` → the provider's
+  default), `api_key` (optional; falls back to `DEEPSEEK_API_KEY` /
+  `OPENROUTER_API_KEY`), `temperature`, `top_p`, `num_ctx` (ollama),
+  `num_predict` (→ `max_tokens` for OpenAI-compatible providers), `seed`, `extra`.
 - **`ModelRegistry`**:
   - Constructor runs `_assert_hunter_ne_validator()` — **fails loudly if
     `(HUNTER.provider, HUNTER.model) == (VALIDATOR_BUG.provider, …)`**
@@ -470,11 +473,21 @@ deny-list hits (empty = accepted):
     model grading its own homework.
   - `endpoint(role)`, `sampling_params(role)` (flattened dict recorded on
     findings, no `api_key`), `chat_model(role)` → a LangChain `BaseChatModel`
-    (`ChatOllama` / `ChatDeepSeek`), cached per role.
+    (`ChatOllama` / `ChatDeepSeek` / `ChatOpenAI`), cached per role.
   - `from_env()` layers `CRUCIBLE_PROVIDER_<ROLE>` / `CRUCIBLE_MODEL_<ROLE>` /
-    `CRUCIBLE_API_KEY_<ROLE>` / `CRUCIBLE_{OLLAMA,DEEPSEEK}_BASE_URL` over
-    `crucible/config.py` `DEFAULT_ENDPOINTS`; `crucible.toml` `[models.<role>]`
-    sits in between.
+    `CRUCIBLE_API_KEY_<ROLE>` / `CRUCIBLE_{OLLAMA,DEEPSEEK}_BASE_URL` /
+    `OPENROUTER_BASE_URL` over `crucible/config.py` `DEFAULT_ENDPOINTS`; the file
+    config sits in between.
+  - **File config** (`crucible/config.py`): `load_registry()` resolves
+    `DEFAULT_ENDPOINTS` → `crucible.toml` → `config.yaml` (both auto-discovered in
+    the CWD, YAML layered last so it wins; or `--config PATH`, format by suffix) →
+    env. **Secrets never come from the file.** `apply_file_tracing_env()` folds a
+    `config.yaml` `tracing:` block (`langsmith` / `otel` enable + project /
+    endpoint) into `os.environ` via `setdefault` before `obs.setup_tracing()`.
+  - **Model matrix / OpenRouter:** route every role to `openrouter` and give each
+    its model id (`config.yaml` `models:` or `CRUCIBLE_MODEL_<ROLE>`). OpenRouter
+    has no default model — a role switched to it without one raises at
+    `from_env()` time.
 - Design stance: **providers are interchangeable commodities.** They change
   temperature, caching, and inference-effort budgets over time — build to absorb
   that volatility.
@@ -818,12 +831,14 @@ exceeded 14) — per-PR needs a separate, cheaper, smaller harness.
 
 | Variable | Used by | Meaning |
 |---|---|---|
-| `<ROLE>_LLM` | `registry.from_env` | short provider alias, e.g. `RECON_LLM=deepseek` (`ollama` \| `deepseek` \| `openai`*); `CRUCIBLE_PROVIDER_<ROLE>` overrides it |
+| `config.yaml` / `crucible.toml` | `config.load_registry`, `config.apply_file_tracing_env` | auto-discovered non-secret file config (`models:` matrix + `tracing:` toggles); YAML wins over TOML; `--config PATH` overrides discovery; gitignored |
+| `<ROLE>_LLM` | `registry.from_env` | short provider alias, e.g. `RECON_LLM=openrouter` (`ollama` \| `deepseek` \| `openrouter` \| `openai`*); `CRUCIBLE_PROVIDER_<ROLE>` overrides it |
 | `CRUCIBLE_PROVIDER_<ROLE>` | `registry.from_env` | provider per role (`RECON`, `HUNTER`, `VALIDATOR_BUG`, `VALIDATOR_REACH`) |
-| `CRUCIBLE_MODEL_<ROLE>` | `registry.from_env` | per-role model name (wins over `DEEPSEEK_MODEL`) |
+| `CRUCIBLE_MODEL_<ROLE>` | `registry.from_env` | per-role model name (wins over `DEEPSEEK_MODEL`); **required** for an `openrouter` role — no default |
 | `DEEPSEEK_MODEL` | `registry.from_env` | default model for any deepseek role (default `deepseek-v4-flash`) |
-| `CRUCIBLE_API_KEY_<ROLE>` | `registry.from_env` | per-role key (else `DEEPSEEK_API_KEY`) |
-| `CRUCIBLE_OLLAMA_BASE_URL` / `CRUCIBLE_DEEPSEEK_BASE_URL` | `registry.from_env` | base URL for all roles on that provider |
+| `CRUCIBLE_API_KEY_<ROLE>` | `registry.from_env` | per-role key (else `DEEPSEEK_API_KEY` / `OPENROUTER_API_KEY`) |
+| `OPENROUTER_API_KEY` | `registry.chat_model` | key for every `openrouter` role (unless `CRUCIBLE_API_KEY_<ROLE>` set) |
+| `CRUCIBLE_OLLAMA_BASE_URL` / `CRUCIBLE_DEEPSEEK_BASE_URL` / `OPENROUTER_BASE_URL` | `registry.from_env` | base URL for all roles on that provider (OpenRouter default `https://openrouter.ai/api/v1`) |
 | `--checkpoint-db` | `cli run` | `SqliteSaver` path (execution state) |
 | `--store-url` | `cli status` | SQLAlchemy URL for `findings.sqlite` (domain state) |
 | `--workspace` | `cli run` | agent-writable working tree (default `.crucible-workspace`) |

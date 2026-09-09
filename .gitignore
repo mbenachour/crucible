@@ -3,6 +3,9 @@ __pycache__/
 .venv/
 .env
 .env.*
+config.yaml
+config.yml
+crucible.toml
 *.sqlite
 *.sqlite-*
 checkpoints.sqlite*
@@ -25,3 +28,7 @@ dist/
 tests/**/__pycache__/
 tests/.pytest_cache/
 tests/fixtures/repos/_local/
+
+# Local scan targets checked out under tests/ for manual runs (not fixtures).
+tests/ReactNativeSampleApp/
+tests/vulnerable_react_app/

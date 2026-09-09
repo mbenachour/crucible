@@ -7,8 +7,10 @@ fails loudly if they match.
 
 Providers are interchangeable commodities. The registry is written to absorb
 that: a role is bound to a `(provider, model, sampling)` triple, and
-`chat_model(role)` returns a LangChain `BaseChatModel`. Only the **Ollama**
-provider is wired today (`langchain-ollama`); `vllm` / `openai_compat` are
+`chat_model(role)` returns a LangChain `BaseChatModel`. Wired providers:
+`ollama` (local), `deepseek` (hosted, OpenAI-compatible) and `openrouter`
+(one key, any hosted model — the "model matrix"; needs `OPENROUTER_API_KEY`
+and an explicit per-role model id). `openai` / `vllm` / `openai_compat` stay
 reserved enum values so config and call sites do not have to change later.
 
 Per-role sampling params are recorded on every finding (see `sampling_params`).
@@ -32,8 +34,9 @@ class ModelRole(str, Enum):
 
 
 class Provider(str, Enum):
-    OLLAMA = "ollama"        # local, via langchain-ollama
-    DEEPSEEK = "deepseek"    # hosted, OpenAI-compatible, via langchain-deepseek
+    OLLAMA = "ollama"          # local, via langchain-ollama
+    DEEPSEEK = "deepseek"      # hosted, OpenAI-compatible, via langchain-deepseek
+    OPENROUTER = "openrouter"  # hosted aggregator, OpenAI-compatible, via langchain-openai
     # Reserved — accepted in config/env but `chat_model` raises until wired.
     OPENAI = "openai"
     VLLM = "vllm"
@@ -53,15 +56,22 @@ class Provider(str, Enum):
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash"
+DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 # per-provider env var holding the API key (checked at chat_model() time)
-_PROVIDER_API_KEY_ENV = {Provider.DEEPSEEK: "DEEPSEEK_API_KEY"}
-# per-provider env var holding the default model name
+_PROVIDER_API_KEY_ENV = {
+    Provider.DEEPSEEK: "DEEPSEEK_API_KEY",
+    Provider.OPENROUTER: "OPENROUTER_API_KEY",
+}
+# per-provider env var holding the default model name. OpenRouter is
+# deliberately absent: a role routed there MUST name its model explicitly
+# (CRUCIBLE_MODEL_<ROLE> or a [models.<role>] table) — no silent default.
 _PROVIDER_MODEL_ENV = {Provider.DEEPSEEK: "DEEPSEEK_MODEL"}
 _PROVIDER_DEFAULT_MODEL = {Provider.DEEPSEEK: DEFAULT_DEEPSEEK_MODEL}
 _PROVIDER_DEFAULT_BASE_URL = {
     Provider.OLLAMA: DEFAULT_OLLAMA_BASE_URL,
     Provider.DEEPSEEK: DEFAULT_DEEPSEEK_BASE_URL,
+    Provider.OPENROUTER: DEFAULT_OPENROUTER_BASE_URL,
 }
 
 
@@ -174,10 +184,31 @@ class ModelRegistry:
             }
             ds_kwargs.update(dict(e.extra))
             model = ChatDeepSeek(**ds_kwargs)
+        elif e.provider is Provider.OPENROUTER:
+            from langchain_openai import ChatOpenAI
+
+            or_kwargs: dict = {
+                "model": e.model,
+                "base_url": e.resolved_base_url(),
+                "api_key": self._api_key(e),
+                "temperature": e.temperature,
+                "top_p": e.top_p,
+                "max_tokens": e.num_predict,   # OpenAI-compatible knob
+                # OpenRouter's optional attribution headers — harmless if the
+                # env vars are unset, and overridable via `extra`.
+                "default_headers": {
+                    "HTTP-Referer": os.environ.get(
+                        "OPENROUTER_SITE_URL", "https://github.com/mbenachour/crucible"
+                    ),
+                    "X-Title": os.environ.get("OPENROUTER_APP_NAME", "crucible"),
+                },
+            }
+            or_kwargs.update(dict(e.extra))
+            model = ChatOpenAI(**or_kwargs)
         else:
             raise NotImplementedError(
                 f"provider {e.provider.value!r} is reserved but not wired; "
-                "use 'ollama' or 'deepseek'"
+                "use 'ollama', 'deepseek' or 'openrouter'"
             )
         self._cache[role] = model
         return model
@@ -193,18 +224,22 @@ class ModelRegistry:
 
         - ``<ROLE>_LLM``                   friendly provider alias, e.g. ``RECON_LLM=deepseek``
         - ``CRUCIBLE_PROVIDER_<ROLE>``      provider (wins over ``<ROLE>_LLM``)
-        - ``CRUCIBLE_MODEL_<ROLE>``         per-role model (wins over ``DEEPSEEK_MODEL``)
+        - ``CRUCIBLE_MODEL_<ROLE>``         per-role model — this is the "model
+          matrix"; **required** for any role routed to ``openrouter``
         - ``DEEPSEEK_MODEL``               default model for any deepseek role
         - ``CRUCIBLE_TEMPERATURE_<ROLE>``
-        - ``CRUCIBLE_API_KEY_<ROLE>``       per-role key (else the provider env var)
+        - ``CRUCIBLE_API_KEY_<ROLE>``       per-role key (else the provider env var:
+          ``DEEPSEEK_API_KEY`` / ``OPENROUTER_API_KEY``)
         - ``CRUCIBLE_OLLAMA_BASE_URL``      applies to every ollama role
         - ``CRUCIBLE_DEEPSEEK_BASE_URL``    applies to every deepseek role
+        - ``OPENROUTER_BASE_URL``          applies to every openrouter role
         """
         from crucible.config import DEFAULT_ENDPOINTS  # local import: avoid cycle
 
         base = dict(defaults or DEFAULT_ENDPOINTS)
         ollama_base = os.environ.get("CRUCIBLE_OLLAMA_BASE_URL")
         deepseek_base = os.environ.get("CRUCIBLE_DEEPSEEK_BASE_URL")
+        openrouter_base = os.environ.get("OPENROUTER_BASE_URL")
         out: dict[ModelRole, ModelEndpoint] = {}
         for role, ep in base.items():
             r = role.value.upper()
@@ -224,6 +259,16 @@ class ModelRegistry:
             provider_model_env = os.environ.get(_PROVIDER_MODEL_ENV.get(provider, ""))
             if explicit_model:
                 model = explicit_model
+            elif provider is Provider.OPENROUTER and provider is not ep.provider:
+                # Switched to OpenRouter without naming a model: an inherited
+                # ollama tag would silently become a bogus OpenRouter id.
+                raise ValueError(
+                    f"role {role.value!r} is routed to OpenRouter but no model is "
+                    f"set. Add CRUCIBLE_MODEL_{r}=<openrouter model id> to your "
+                    f".env (e.g. anthropic/claude-sonnet-4), or set "
+                    f"models.{role.value}.model in config.yaml (or a "
+                    f"[models.{role.value}] table in crucible.toml)."
+                )
             elif provider is not ep.provider:
                 model = provider_model_env or _PROVIDER_DEFAULT_MODEL.get(provider, ep.model)
             elif provider_model_env:
@@ -236,6 +281,8 @@ class ModelRegistry:
                 base_url = ollama_base
             elif provider is Provider.DEEPSEEK and deepseek_base:
                 base_url = deepseek_base
+            elif provider is Provider.OPENROUTER and openrouter_base:
+                base_url = openrouter_base
             out[role] = ModelEndpoint(
                 role=role,
                 model=model,

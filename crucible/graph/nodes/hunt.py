@@ -38,7 +38,7 @@ from pydantic import BaseModel, Field, ValidationError
 from crucible.config import MODEL_CALLS_PER_TASK
 from crucible.graph.hooks import MAX_CONTINUATIONS
 from crucible.graph.state import CrucibleState
-from crucible.obs import span
+from crucible.obs import progress, span
 from crucible.sandbox import SandboxLimits
 from crucible.validation.schema import Finding, tautology_reasons
 from crucible.workspace import layout
@@ -113,38 +113,50 @@ def run(state: CrucibleState, deps=None) -> CrucibleState:
     new_finding_ids: list[str] = []
     forks_this_run = 0
 
-    for task in batch:
-        task_id = task["task_id"]
-        area = task.get("area") or "."
-        attack_class = task["attack_class"]
-        with span("hunt.task", task_id=task_id, attack_class=attack_class):
-            t0 = time.monotonic()
-            try:
-                fids, forks, shallow = _hunt_one(
-                    task=task, repo=repo, ws=ws, run_id=run_id, arch_md=arch_md,
-                    catalog=catalog, deps=deps, registry=registry, store=store,
-                    sandbox_provider=sandbox_provider,
-                    forks_left=MAX_FORKS_PER_RUN - forks_this_run,
-                )
-            except Exception as e:  # noqa: BLE001 — resilience: log and continue
-                _log_error(errors_path, "HUNT", task_id, f"{type(e).__name__}: {e}")
-                shallow, fids, forks = False, [], 0
-            new_finding_ids.extend(fids)
-            forks_this_run += forks
-            dt = time.monotonic() - t0
+    bar_cm = progress("Hunt", len(batch))
+    bar = bar_cm.__enter__()
+    try:
+        for task in batch:
+            task_id = task["task_id"]
+            area = task.get("area") or "."
+            attack_class = task["attack_class"]
+            bar.set(f"Hunt · {task_id} {attack_class}")
             log.info(
-                "hunt task %s  %-22s %s  %.1fs  findings=%d forks=%d%s",
-                task_id, attack_class, task.get("chunk_type", "?"), dt,
-                len(fids), forks, "  [shallow]" if shallow else "",
+                "hunt task %s  START  %-22s %-10s area=%s  scope=%s",
+                task_id, attack_class, task.get("chunk_type", "?"), area,
+                (task.get("scope_hint") or "(none)")[:70],
             )
-            cell = f"{area}::{attack_class}"
-            if cell not in state["completed_cells"]:
-                state["completed_cells"].append(cell)
-            # §13 shallow-detection: one retry via the continuation loop.
-            if shallow and not fids and task.get("continuation_count", 0) < 1:
-                t2 = dict(task)
-                t2["continuation_count"] = task.get("continuation_count", 0) + 1
-                requeue.append(t2)
+            with span("hunt.task", task_id=task_id, attack_class=attack_class):
+                t0 = time.monotonic()
+                try:
+                    fids, forks, shallow = _hunt_one(
+                        task=task, repo=repo, ws=ws, run_id=run_id, arch_md=arch_md,
+                        catalog=catalog, deps=deps, registry=registry, store=store,
+                        sandbox_provider=sandbox_provider,
+                        forks_left=MAX_FORKS_PER_RUN - forks_this_run,
+                    )
+                except Exception as e:  # noqa: BLE001 — resilience: log and continue
+                    _log_error(errors_path, "HUNT", task_id, f"{type(e).__name__}: {e}")
+                    shallow, fids, forks = False, [], 0
+                new_finding_ids.extend(fids)
+                forks_this_run += forks
+                dt = time.monotonic() - t0
+                log.info(
+                    "hunt task %s  DONE   %-22s %s  %.1fs  findings=%d forks=%d%s",
+                    task_id, attack_class, task.get("chunk_type", "?"), dt,
+                    len(fids), forks, "  [shallow]" if shallow else "",
+                )
+                cell = f"{area}::{attack_class}"
+                if cell not in state["completed_cells"]:
+                    state["completed_cells"].append(cell)
+                # §13 shallow-detection: one retry via the continuation loop.
+                if shallow and not fids and task.get("continuation_count", 0) < 1:
+                    t2 = dict(task)
+                    t2["continuation_count"] = task.get("continuation_count", 0) + 1
+                    requeue.append(t2)
+            bar.tick()
+    finally:
+        bar_cm.__exit__(None, None, None)
 
     state["finding_ids"] = list(state.get("finding_ids") or []) + new_finding_ids
     state["fork_count"] = state.get("fork_count", 0) + forks_this_run
