@@ -8,6 +8,8 @@ Also renders `architecture.md` from the seed + R1 contributions.
 
 from __future__ import annotations
 
+import re
+
 from crucible.recon.schema import (
     AttackSurfaceItem,
     ChunkType,
@@ -117,6 +119,101 @@ _STRIDE_CLASS = {
     "eop": "auth_bypass",
 }
 
+# Queue tiers — the head of the hunt queue is the highest-value work Recon can
+# name. `decompose` sorts on (_TIER, priority, area, class), so ranked-surface +
+# taint chunks come first, then specialist, risk, threat_fallback, and the
+# baseline catch_all sweep LAST (issue #35).
+_TIER: dict[ChunkType, int] = {
+    ChunkType.SURFACE: 0,
+    ChunkType.TAINT: 0,
+    ChunkType.SPECIALIST: 1,
+    ChunkType.RISK: 2,
+    ChunkType.THREAT_FALLBACK: 3,
+    ChunkType.CATCH_ALL: 4,
+}
+
+# At most this many ranked `AttackSurfaceItem`s become SURFACE chunks, so a wide
+# surface can't crowd specialist / risk chunks out of the capped queue.
+SURFACE_CHUNK_LIMIT = 20
+
+_FILE_LINE = re.compile(r"([\w./\-]+\.\w+):(\d+)")
+_TRAILING_PAREN = re.compile(r"\(([^()]+)\)\s*$")
+
+# substrings in a `SubsystemMap.dangerous_sinks` string -> the attack class it
+# implies (issue #35 part 3 — "attack class from the sink kind where derivable")
+_SINK_CLASS: list[tuple[tuple[str, ...], str]] = [
+    (("subprocess", "popen", "os.system", "system(", "shell=true", "/bin/sh",
+      "execve", "execl", "os.exec", "spawn", "child_process", "eval("),
+     "command_injection"),
+    (("deserial", "pickle", "yaml.load", "marshal", "unmarshal", "unserialize",
+      "readobject"), "unsafe_deserialization"),
+    (("sql", "query(", "execute(", "executemany", "cursor", "select ",
+      "sqlalchemy", ".raw(", "sequelize"), "sql_injection"),
+    (("render_template", "jinja", "template_string", "render_string", ".render("),
+     "template_injection"),
+    (("os.path", "path traversal", "send_file", "sendfile", "fopen", "open(",
+      "writefile", "filepath"), "path_traversal"),
+]
+
+
+def _class_for_sink(text: str) -> str | None:
+    low = (text or "").lower()
+    for markers, cls in _SINK_CLASS:
+        if any(m in low for m in markers):
+            return cls
+    return None
+
+
+def _parse_fileline_kind(s: str) -> tuple[str, int, EntryPointKind] | None:
+    """`'pkg/parser.go:232 cli — note'` -> `('pkg/parser.go', 232, CLI)`."""
+    m = _FILE_LINE.search(s or "")
+    if not m:
+        return None
+    kind = EntryPointKind.OTHER
+    # the kind token (if any) trails the file:line — `'...:232 cli — note'`
+    for tok in re.split(r"[\s—-]+", s[m.end():].lower().strip()):
+        try:
+            kind = EntryPointKind(tok)
+            break
+        except ValueError:
+            continue
+    return m.group(1), int(m.group(2)), kind
+
+
+def _surface_chunks(
+    attack_surface: list[AttackSurfaceItem] | None,
+    baseline: list[str],
+    incompat: set[str],
+    area_of,
+) -> list[HuntChunk]:
+    """One SURFACE chunk per ranked `AttackSurfaceItem`: seed_path = the exact
+    `file:line` target, attack class from the entry kind (+ framework), priority
+    following rank order so the top-scored target is the first chunk."""
+    out: list[HuntChunk] = []
+    for rank, item in enumerate((attack_surface or [])[:SURFACE_CHUNK_LIMIT]):
+        parsed = _parse_fileline_kind(item.entry_point) or _parse_fileline_kind(item.target)
+        if parsed is None:
+            continue
+        file, line, kind = parsed
+        fw_m = _TRAILING_PAREN.search(item.target or "")
+        synthetic = EntryPoint(
+            kind=kind, file=file, line=line, framework=fw_m.group(1) if fw_m else "",
+        )
+        classes = _classes_for_entrypoint(synthetic, baseline, incompat)
+        cls = classes[0] if classes else (baseline[0] if baseline else "auth_bypass")
+        out.append(HuntChunk(
+            chunk_type=ChunkType.SURFACE,
+            area=item.subsystem or area_of(file),
+            attack_class=cls,
+            scope_hint=(
+                f"ranked #{rank + 1} attack surface (score {item.score:g}, "
+                f"{item.exposure}): {item.rationale}"
+            )[:240],
+            seed_path=f"{file}:{line}",
+            priority=rank,
+        ))
+    return out
+
 
 def _area_of(path: str) -> str:
     parts = path.split("/")
@@ -135,12 +232,20 @@ def decompose(
     *,
     partition: list[dict] | None = None,
     subsystem_maps: list[SubsystemMap] | None = None,
+    attack_surface: list[AttackSurfaceItem] | None = None,
 ) -> list[HuntChunk]:
     """Deterministic hunt-queue seeding. When a `partition` is supplied
     (issue #34 phase 4) the chunk `area` is the **owning subsystem name** rather
     than the first path segment, chunks in an `external_facing` subsystem get a
     priority bump, and boundary-crossing flows from the R1b maps become
-    cross-subsystem `taint` chunks."""
+    cross-subsystem `taint` chunks.
+
+    When `attack_surface` (R1c's ranked `AttackSurfaceItem`s) is supplied
+    (issue #35) each item becomes a `SURFACE` chunk anchored at its exact
+    `file:line`, priority follows rank order, and the queue is tier-sorted so the
+    head = ranked-surface + taint, then specialist, risk, threat_fallback, and
+    the baseline `catch_all` sweep LAST (pruned for areas the surface already
+    covers). Empty/absent `attack_surface` -> the pre-#35 deterministic queue."""
     cap = cap if cap is not None else task_cap(seed)
     incompat = LANG_INCOMPATIBLE.get(seed.primary_language, set())
     baseline = [c for c in BASELINE_BY_KIND.get(seed.repo_kind, []) if c not in incompat]
@@ -162,6 +267,12 @@ def decompose(
             seen.add(key)
             chunks.append(c)
 
+    # --- surface: R1c's ranked attack surface (issue #35) -----------
+    # Highest hunt-relevance artifact recon produces — one chunk per ranked
+    # item, priority == rank so the top-scored target is the first chunk.
+    for c in _surface_chunks(attack_surface, baseline, incompat, area_of):
+        add(c)
+
     # --- taint: boundary-crossing flows stitched by R1c -------------
     for src, sink, label in cross_subsystem_flows(subsystem_maps, partition):
         add(HuntChunk(
@@ -170,6 +281,32 @@ def decompose(
             scope_hint=f"cross-subsystem flow {label}: tainted data leaves {src} and reaches {sink}",
             seed_path=f"{src} -> {sink}", priority=1,
         ))
+
+    # --- taint/risk: dangerous sinks each R1b subsystem owns (issue #35) ---
+    # decompose already consumes cross-subsystem flows; in-subsystem sinks the
+    # map agents report were being dropped.
+    for sm in subsystem_maps or []:
+        for raw in sm.dangerous_sinks:
+            parsed = _parse_fileline_kind(raw)
+            if parsed is None:
+                continue
+            sink_file, sink_line, _ = parsed
+            area = area_of(sink_file)
+            if partition and area == "misc" and sm.subsystem:
+                area = sm.subsystem
+            hint = f"dangerous sink owned by [{sm.subsystem or area}]: {raw.strip()}"[:220]
+            cls = _class_for_sink(raw)
+            if cls and cls not in incompat:
+                add(HuntChunk(
+                    chunk_type=ChunkType.TAINT, area=area, attack_class=cls,
+                    scope_hint=hint, seed_path=f"{sink_file}:{sink_line}", priority=1,
+                ))
+            else:
+                add(HuntChunk(
+                    chunk_type=ChunkType.RISK, area=area, attack_class="dynamic_dispatch",
+                    scope_hint=hint, seed_path=f"{sink_file}:{sink_line}",
+                    priority=bump(3, area),
+                ))
 
     # --- catch_all: entry point x compatible baseline class -----------
     sinks_by_file: dict[str, list[int]] = {}
@@ -228,15 +365,33 @@ def decompose(
         areas = [p["name"] for p in partition]
     else:
         areas = sorted({_area_of(f.path) for f in seed.files if f.role == "source"})
+
+    # When R1c named a ranked attack surface, the baseline sweep is a backstop
+    # only: don't dilute the queue with blind sweeps of areas the surface (or a
+    # concrete entry point) already covers, and never duplicate a ranked-surface
+    # chunk for the same area+class (issue #35 part 2).
+    prune = bool(attack_surface)
+    surface_areas = {c.area for c in chunks if c.chunk_type is ChunkType.SURFACE}
+    covered_area_class = {
+        (c.area, c.attack_class) for c in chunks
+        if c.chunk_type in (ChunkType.SURFACE, ChunkType.TAINT, ChunkType.CATCH_ALL)
+    }
+    entry_areas = {area_of(ep.file) for ep in seed.entry_points}
+
     for area in areas[:8]:
+        if (prune and area in surface_areas
+                and area not in external and area not in entry_areas):
+            continue
         for cls in baseline:
+            if prune and (area, cls) in covered_area_class:
+                continue
             add(HuntChunk(
                 chunk_type=ChunkType.CATCH_ALL, area=area, attack_class=cls,
                 scope_hint=f"baseline sweep of {area}/ for {cls}",
                 priority=bump(sweep_prio, area),
             ))
 
-    chunks.sort(key=lambda c: (c.priority, c.area, c.attack_class))
+    chunks.sort(key=lambda c: (_TIER.get(c.chunk_type, 5), c.priority, c.area, c.attack_class))
     return chunks[:cap]
 
 

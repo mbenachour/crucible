@@ -170,7 +170,8 @@ def run(state: CrucibleState, deps=None) -> CrucibleState:
     cap = task_cap(seed)
     with span("recon.r3_decompose"):
         chunks = decompose(seed, threat_model, cap,
-                           partition=partition, subsystem_maps=subsystem_maps)
+                           partition=partition, subsystem_maps=subsystem_maps,
+                           attack_surface=attack_surface)
     (recon_dir / "task_manifest.json").write_text(
         json.dumps(
             {"cap": cap, "count": len(chunks),

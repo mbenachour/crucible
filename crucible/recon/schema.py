@@ -37,6 +37,7 @@ class RepoKind(str, Enum):
 
 
 class ChunkType(str, Enum):
+    SURFACE = "surface"
     TAINT = "taint"
     RISK = "risk"
     SPECIALIST = "specialist"

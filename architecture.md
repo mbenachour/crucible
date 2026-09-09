@@ -205,7 +205,7 @@ content no single subsystem agent sees):
 | **R1b subsystem maps** | `_run_map` fan-out | RECON | per-subsystem `SubsystemMap` — `_emit` forces one `tool_choice=SubsystemMap` call; runs one agent per subsystem concurrently on `ThreadPoolExecutor(RECON_MAX_PARALLEL)`, distinct `thread_id`, `=1` keeps sequential |
 | **R1c synthesis** | `recon/synthesize.py` + `recon/decompose.render_architecture` | no | `workspace/architecture.md` (11 target sections), `workspace/recon/attack_surface.json` — `rank_attack_surface` (exposure × entry-kind severity × sink-proximity × threat-model corroboration), `derive_auth_model`, `stitch_data_flows`; a degradation banner when `recon_quality != full` |
 | **R2 threat model** | node `_run_threatmodel` | RECON | `workspace/recon/threat_model.json` — `response_format=ThreatModel`; attackers, assets, trust boundaries, STRIDE, repo-specific classes |
-| **R3 decompose** | `recon/decompose.decompose` | no | seeds `state["pending_hunts"]` + `workspace/recon/task_manifest.json`; chunk `area` = owning subsystem, `external_facing` subsystems get a priority bump, cross-subsystem stitched flows → `taint` chunks (`injection_passthrough`, `A/x.py:10 -> B/y.py:88`) |
+| **R3 decompose** | `recon/decompose.decompose` | no | seeds `state["pending_hunts"]` + `workspace/recon/task_manifest.json`; consumes R1c's ranked `attack_surface` → one `surface` chunk per item (`seed_path` = exact `file:line`, class from entry kind, priority = rank); `SubsystemMap.dangerous_sinks` → per-subsystem `taint`/`risk` chunks; chunk `area` = owning subsystem, `external_facing` subsystems get a priority bump, cross-subsystem stitched flows → `taint` chunks (`injection_passthrough`, `A/x.py:10 -> B/y.py:88`); queue is **tier-sorted** (issue #35) |
 
 `recon_quality ∈ {full, partial, seed_only}` is written to graph state (and
 `workspace/recon/recon_quality.txt`, echoed by the CLI): `full` = every
@@ -218,10 +218,22 @@ Pruned against the primary language (`LANG_INCOMPATIBLE` — no memory classes i
 Python/JS). Per-entry-point class choice is framework-aware (an Express route in
 a mobile repo still gets web classes).
 
-**Typed hunt chunks** (`HuntTask.chunk_type`): `taint` (entry point + a dynamic
-sink nearby → `file:line -> file:line`, priority 1), `catch_all` (entry point ×
-class, and an always-on area × baseline sweep), `risk` (a reflection fact),
-`specialist` / `threat_fallback` (from R2).
+**Typed hunt chunks** (`HuntTask.chunk_type`): `surface` (a ranked
+`AttackSurfaceItem` — `seed_path` = the exact target, priority = rank order),
+`taint` (entry point + a dynamic sink nearby, a stitched cross-subsystem flow,
+or a `SubsystemMap` dangerous sink → `file:line[ -> file:line]`, priority 1),
+`catch_all` (entry point × class, and a baseline area × class sweep — emitted
+LAST and pruned for areas the ranked surface already covers), `risk` (a
+reflection fact or an underived sink), `specialist` / `threat_fallback` (from R2).
+
+**Queue ordering (issue #35).** `decompose` tier-sorts on
+`(_TIER[chunk_type], priority, area, class)` with
+`_TIER = surface=0, taint=0, specialist=1, risk=2, threat_fallback=3, catch_all=4`,
+so the first `HUNT_MAX_TASKS_PER_RUN` batch Hunt pops off the head = the
+highest-value hunts Recon can name (ranked attack surface + taint), and the
+blind baseline sweep is a backstop for Gapfill. When the surface is empty
+(`partial` / `seed_only` with no entry points) the pre-#35 deterministic queue
+is preserved.
 
 **Resilience:** no registry, or an R1/R2 model failure → logged to
 `workspace/recon/errors.jsonl`, the run continues on the seed alone (R3 still

@@ -482,6 +482,10 @@ def _attack_class_body(attack_class: str) -> tuple[str, str]:
 def _hunt_task_text(task: dict, arch_md: str, methodology: str, catalog: str, has_sandbox: bool) -> str:
     chunk_type = task.get("chunk_type", "catch_all")
     framing = {
+        "surface": "Recon ranked this entry point at the top of the attack surface. "
+                   "The seed path is the exact target; the scope hint carries the "
+                   "ranking rationale and exposure. Confirm reachability, then hunt "
+                   "the named class from that entry point inward.",
         "taint": "A concrete source→sink path was seeded. Prove (or disprove) that "
                  "attacker input reaches the sink and what it can do there.",
         "risk": "A dynamic-dispatch / reflection site was flagged. Determine whether "
