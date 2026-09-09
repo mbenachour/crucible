@@ -108,4 +108,6 @@ def test_apply_file_tracing_env_does_not_clobber_real_env(tmp_path, monkeypatch)
 def test_no_config_file_is_a_noop(monkeypatch):
     _clear_model_env(monkeypatch)
     reg = load_registry("/nonexistent/config.yaml")
-    assert reg.endpoint(ModelRole.HUNTER).provider is Provider.OLLAMA  # built-in default
+    # built-in DEFAULT_ENDPOINTS unchanged
+    assert reg.endpoint(ModelRole.RECON).provider is Provider.OLLAMA
+    assert reg.endpoint(ModelRole.HUNTER).model == "deepseek-v4-flash"

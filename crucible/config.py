@@ -48,13 +48,16 @@ from crucible.llm.registry import (
     Provider,
 )
 
-# Hunter lineage (Qwen) != validator lineage (Llama) -> §6 assertion passes.
+# Hunter lineage (DeepSeek) != validator lineage (Llama) -> §6 assertion passes.
+# Hunter defaults to hosted deepseek-v4-flash (needs DEEPSEEK_API_KEY); override
+# per role via config.yaml / env as usual.
 DEFAULT_ENDPOINTS: dict[ModelRole, ModelEndpoint] = {
     ModelRole.RECON: ModelEndpoint(
         role=ModelRole.RECON, model="qwen2.5-coder:7b", temperature=0.1, num_ctx=16384
     ),
     ModelRole.HUNTER: ModelEndpoint(
-        role=ModelRole.HUNTER, model="qwen2.5-coder:7b", temperature=0.3, num_ctx=16384
+        role=ModelRole.HUNTER, model="deepseek-v4-flash",
+        provider=Provider.DEEPSEEK, temperature=0.3,
     ),
     ModelRole.VALIDATOR_BUG: ModelEndpoint(
         role=ModelRole.VALIDATOR_BUG, model="llama3.1:8b", temperature=0.1
