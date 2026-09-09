@@ -32,6 +32,7 @@ class CrucibleState(TypedDict):
 
     architecture_path: str
     taxonomy_path: str
+    report_path: str                 # set by the report node -> workspace/report.json
 
     recon_quality: str               # full | partial | seed_only (issue #34)
     subsystems: list[dict]           # [{name, responsibility, external_facing, files, loc}]

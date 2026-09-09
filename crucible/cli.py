@@ -112,6 +112,7 @@ def run(
         "primary_language": language,
         "architecture_path": "",
         "taxonomy_path": "",
+        "report_path": "",
         "recon_quality": "",
         "subsystems": [],
         "pending_hunts": [],
@@ -163,7 +164,22 @@ def run(
         log.exception("run %s failed after %.1fs", run_id, time.monotonic() - started)
         raise
     _echo_recon_quality()
-    log.info("run %s complete in %.1fs", run_id, time.monotonic() - started)
+    elapsed = time.monotonic() - started
+    log.info("run %s complete in %.1fs", run_id, elapsed)
+    report = workspace / "report.json"
+    if report.is_file():
+        try:
+            import json as _json
+
+            counts = _json.loads(report.read_text()).get("counts", {})
+            typer.secho(
+                f"done in {elapsed:.0f}s — {counts.get('upheld', 0)} upheld / "
+                f"{counts.get('total', 0)} findings",
+                fg=typer.colors.GREEN,
+            )
+        except Exception as e:  # noqa: BLE001 — a cosmetic summary must not fail the run
+            log.debug("report summary echo failed: %s", e)
+        typer.echo(f"report: {report}  ({workspace}/report.md)")
 
 
 @app.command()

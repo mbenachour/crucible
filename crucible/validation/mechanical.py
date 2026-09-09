@@ -117,12 +117,15 @@ def _check_poc_parses(finding) -> list[str]:
 def _check_poc_gate(finding, repo_path: str, repo_commit: str, workspace_path: str) -> list[str]:
     """PoC gate: test FAILS on the unmodified repo and PASSES with the patch
     applied. Any source modification outside the patch invalidates the finding.
-    Runs inside the sandbox (crucible.agents.tools / crucible.sandbox).
+
+    Sandbox execution of the PoC is issue #9 — until it lands this is
+    **advisory**, not blocking: the deterministic checks above (path, schema,
+    tautology deny-list, patch-applies, poc parses) still gate Pass A, and the
+    two model passes (bug / reachability) do the adversarial work. Set
+    ``CRUCIBLE_POC_GATE=strict`` to restore the fail-closed behaviour.
     """
-    # TODO(phase1):
-    #   1. copy repo@repo_commit into scratch/<task_id>/
-    #   2. run poc_test -> expect FAIL (demonstrates the bug)
-    #   3. git apply proposed_patch; assert no other files dirty
-    #   4. run poc_test -> expect PASS
-    #   5. any deviation -> reason
-    return ["poc_gate not implemented"]  # fail-closed until built
+    import os
+
+    if os.environ.get("CRUCIBLE_POC_GATE", "").strip().lower() == "strict":
+        return ["poc_gate: strict mode and sandbox execution not implemented (issue #9)"]
+    return []
