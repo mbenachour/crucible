@@ -337,9 +337,40 @@ pipx install dist/crucible-*.whl # or: pip install dist/crucible-*.whl
 ### Tests
 
 ```bash
-pytest                           # 34 deterministic units, no network / no Docker
+pytest                           # deterministic units, no network / no Docker
 pytest tests/test_cli.py -v      # CLI smoke: help, status, run-to-stub
+pytest tests/api -q              # HTTP API contract suite
 ```
+
+## HTTP API
+
+A read-first HTTP API over everything a run produces — the domain store
+(`findings.sqlite`), the LangGraph execution state (`checkpoints.sqlite`), and
+the git-per-node workspace tree. It makes no outbound network calls.
+
+```bash
+pip install -e ".[api]"
+crucible serve                   # 127.0.0.1:8787 — docs at /docs, schema at /openapi.json
+```
+
+| Endpoint | Returns |
+|---|---|
+| `GET /runs` · `GET /runs/{id}` | run list / detail + funnel counts |
+| `GET /runs/{id}/report` · `/report.md` | the deterministic report (JSON / Markdown) |
+| `GET /runs/{id}/metrics` | funnel counts, fork rate, per-tool usage |
+| `GET /runs/{id}/coverage` | `(area × attack_class)` matrix + gapfill buckets |
+| `GET /runs/{id}/findings` | filter `status` / `severity` / `attack_class`, paginated |
+| `GET /findings/{id}` · `/validations` | full finding + provenance + per-pass verdict trail |
+| `GET /findings?stable_key=…` | cross-run history for one structural key |
+| `GET /runs/{id}/state` | execution state — `pending_hunts`, `cycle_count`, `recon_quality`, next node |
+| `GET /runs/{id}/artifacts[/{path}]` | index + raw workspace file (traversal-guarded) |
+| `GET /runs/{id}/architecture` · `/recon/{seed,module-map,threat-model,attack-surface,task-manifest}` · `/dedup/clusters` · `/log` | typed artifact shortcuts |
+| `GET /runs/{id}/wishes` · `GET /wishes` · `POST /wishes/{id}/resolve` | blocked-task wishlist (§9.3) |
+
+Auth is off on a loopback bind. Set `CRUCIBLE_API_TOKEN` (and optionally
+`CRUCIBLE_API_TOKEN_READONLY`) to require a bearer token; binding a non-loopback
+address without one is refused unless `--no-auth` is passed. See the
+[`API` milestone](https://github.com/mbenachour/crucible/milestone/6).
 
 ## What Phase 1 "done" needs (specs.md §14)
 

@@ -32,6 +32,13 @@ class Run(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     status: Mapped[str] = mapped_column(String, default="running")
 
+    # Where this run's git-per-node workspace lives, and how it ended. Recorded
+    # by the CLI so the API can find and serve a run's artifacts (issue #38).
+    workspace_path: Mapped[str] = mapped_column(String, default="")
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    outcome: Mapped[str] = mapped_column(String, default="")  # completed | stopped_at_stub | stopped_after_stage | failed
+    report_path: Mapped[str] = mapped_column(String, default="")
+
     findings: Mapped[list["FindingRow"]] = relationship(back_populates="run")
 
 

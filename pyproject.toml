@@ -31,7 +31,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.5"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.5", "httpx>=0.27"]
+# Read-first HTTP API over runs, findings, reports & artifacts (`crucible serve`).
+api = ["fastapi>=0.115", "uvicorn>=0.30"]
 # Extra model providers (Ollama is built in via langchain-ollama).
 providers = ["litellm>=1.40"]
 # Cross-repo reachability (Phase 3): Joern CPG bridge etc.

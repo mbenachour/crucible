@@ -94,7 +94,7 @@ def run(
         log.debug("model[%s] = %s:%s", role.value, ep.provider.value, ep.model)
 
     if not resume:
-        store.create_run(run_id, str(repo), repo_commit, language)
+        store.create_run(run_id, str(repo), repo_commit, language, str(workspace.resolve()))
 
     deps = NodeDeps(
         registry=registry,
@@ -145,6 +145,7 @@ def run(
         # node: everything up to and including <stage> ran and checkpointed.
         elapsed = time.monotonic() - started
         log.info("run %s stopped after %s (--stop-after) in %.1fs", run_id, e.stage, elapsed)
+        store.finish_run(run_id, "stopped_after_stage")
         _echo_recon_quality()
         typer.secho(f"stopped after {e.stage} (--stop-after)", fg=typer.colors.GREEN)
         typer.echo(f"resume with:  crucible run --repo {repo} --resume {run_id}")
@@ -155,6 +156,7 @@ def run(
         # boundary (config, registry, store, workspace, checkpointer) ran.
         elapsed = time.monotonic() - started
         log.warning("run %s stopped at stub node after %.1fs: %s", run_id, elapsed, e)
+        store.finish_run(run_id, "stopped_at_stub")
         _echo_recon_quality()
         typer.secho(f"stopped at stub node: {e}", fg=typer.colors.YELLOW)
         typer.echo(f"resume after implementing it with:  crucible run --repo {repo} --resume {run_id}")
@@ -162,11 +164,13 @@ def run(
         raise typer.Exit(3)
     except Exception:
         log.exception("run %s failed after %.1fs", run_id, time.monotonic() - started)
+        store.finish_run(run_id, "failed")
         raise
     _echo_recon_quality()
     elapsed = time.monotonic() - started
     log.info("run %s complete in %.1fs", run_id, elapsed)
     report = workspace / "report.json"
+    store.finish_run(run_id, "completed", str(report.resolve()) if report.is_file() else "")
     if report.is_file():
         try:
             import json as _json
@@ -180,6 +184,42 @@ def run(
         except Exception as e:  # noqa: BLE001 — a cosmetic summary must not fail the run
             log.debug("report summary echo failed: %s", e)
         typer.echo(f"report: {report}  ({workspace}/report.md)")
+
+
+@app.command()
+def serve(
+    host: str = typer.Option("", "--host", help="bind address (default 127.0.0.1 / $CRUCIBLE_API_HOST)"),
+    port: int = typer.Option(0, "--port", help="bind port (default 8787 / $CRUCIBLE_API_PORT)"),
+    store_url: str = typer.Option("", "--store-url", help="domain store URL"),
+    checkpoint_db: str = typer.Option("", "--checkpoint-db", help="LangGraph checkpoint DB"),
+    workspace_root: str = typer.Option("", "--workspace-root", help="fallback workspace dir for older runs"),
+    no_auth: bool = typer.Option(False, "--no-auth", help="allow a non-loopback bind with no token (trusted network only)"),
+    reload: bool = typer.Option(False, "--reload", help="uvicorn autoreload (dev)"),
+) -> None:
+    """Serve the read-first HTTP API over runs, findings, reports and artifacts."""
+    _load_dotenv()
+    try:
+        import uvicorn
+    except ModuleNotFoundError as e:
+        raise typer.BadParameter(
+            "the API needs the optional extra:  pip install -e '.[api]'"
+        ) from e
+    from crucible.api.app import create_app
+    from crucible.api.settings import ApiSettings
+
+    settings = ApiSettings.from_env(
+        host=host or None,
+        port=port or None,
+        store_url=store_url or None,
+        checkpoint_db=checkpoint_db or None,
+        workspace_root=workspace_root or None,
+        allow_no_auth=no_auth or None,
+    )
+    settings.validate()
+    if not settings.auth_enabled:
+        typer.secho("⚠  no auth token set — API is unauthenticated", fg=typer.colors.YELLOW)
+    typer.echo(f"crucible api  http://{settings.host}:{settings.port}  (docs: /docs)")
+    uvicorn.run(create_app(settings), host=settings.host, port=settings.port, reload=reload)
 
 
 @app.command()
