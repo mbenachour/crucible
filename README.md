@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="crucible.png" alt="Crucible" width="180">
+</p>
+
 # Crucible — Vulnerability Discovery Harness
 
 Crucible turns a codebase into a ranked list of **reachable** security bugs — each
