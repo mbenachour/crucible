@@ -369,7 +369,10 @@ crucible serve                   # 127.0.0.1:8787 — docs at /docs, schema at /
 
 Auth is off on a loopback bind. Set `CRUCIBLE_API_TOKEN` (and optionally
 `CRUCIBLE_API_TOKEN_READONLY`) to require a bearer token; binding a non-loopback
-address without one is refused unless `--no-auth` is passed. See the
+address without one is refused unless `--no-auth` is passed.
+
+Full reference — endpoints, auth, reverse-proxy setup, `curl` recipes:
+[`docs/api.md`](docs/api.md). Tracking: the
 [`API` milestone](https://github.com/mbenachour/crucible/milestone/6).
 
 ## What Phase 1 "done" needs (specs.md §14)
