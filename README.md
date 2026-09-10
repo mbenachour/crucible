@@ -1,16 +1,67 @@
-# Crucible — Vulnerability Discovery Harness (Phase 1 scaffold)
+# Crucible — Vulnerability Discovery Harness
 
-First-draft implementation of **Phase 1** from [`specs.md`](specs.md): the
-minimal harness — **Recon → Hunt → Validate → Report** on a database, with a
-separate validator that cannot file its own findings.
+Crucible turns a codebase into a ranked list of **reachable** security bugs — each
+with a working proof-of-concept and a proposed patch — using a pipeline of
+cooperating LLM agents instead of a single "point a coding agent at the repo"
+session.
 
-The structure, state types, deterministic gates, model routing, schema, and
-instrumentation are real; `recon` and `hunt` are real two-phase agents. The
-**Phase 2** producer–consumer loop — Dedup, Gapfill, Feedback, and the loop
-wiring (§11, issues #19–#22) — is implemented and real-run verified. Still
-`NotImplementedError` stubs: `validate_bug`, `validate_reachability`, `report`,
-and the sandbox PoC-gate execution path — so a run drains the loop and then
-stops cleanly at `validate_bug` (exit 3).
+## Why this exists
+
+Through 2026 a series of public writeups converged on one conclusion: for
+AI-driven vulnerability research, **the orchestration around the model — not the
+model itself — is what makes the results trustworthy.** Crucible is an
+independent, from-scratch implementation of that idea, built to understand the
+architecture hands-on and to run it on a fully open, self-hostable,
+model-agnostic stack.
+
+The three pieces of work it grew out of:
+
+- **Cloudflare — [_why pointing a generic coding agent at a repo doesn't
+  work_](https://blog.cloudflare.com/cyber-frontier-models/#why-pointing-a-generic-coding-agent-at-a-repo-doesnt-work).**
+  Coding agents are tuned for one focused stream of work; vulnerability research
+  is "narrow and parallel," and a single session can explore only a fraction of a
+  percent of the attack surface before its context window fills. Their answer was
+  a structured multi-stage pipeline — Recon → Hunt → Validate → Gapfill → Dedup →
+  Trace → Report — including an adversarial validation stage run by "a different
+  prompt, a different model, and no ability to generate its own findings."
+  Cloudflare reports the quality gains from that discipline (for example, the
+  validation-rejection rate falling from roughly 40% to 11%) came from context
+  and gating, not a stronger model.
+- **Anthropic — [Project Glasswing](https://www.anthropic.com/glasswing).** The
+  collaborative defensive initiative behind those results, centered on the Mythos
+  Preview model. Its public material is the source this project learns from, and
+  it names the frontier gap directly: chaining small primitives into a working
+  exploit, and proving a bug by writing, compiling, and running code that
+  triggers it.
+- **Visa — [Visa Vulnerability Agentic Harness
+  (VVAH)](https://corporate.visa.com/en/sites/visa-perspectives/security-trust/visa-cybersecurity-mythos-project-glasswing.html).**
+  An open-source reference harness built on the same lessons. It shaped Crucible's
+  Recon design — a staged, deterministic-first map of the codebase — and its
+  central point: "progress in software security is no longer limited by how
+  quickly vulnerabilities can be found, but by how quickly they can be verified,
+  disclosed, and patched," with human oversight kept "at every key point in the
+  workflow."
+
+Crucible is a learning-and-research build, not a product. It uses **LangGraph**
+for a durable, checkpointed stage machine and **LangChain** agents for each
+stage, and routes every agent role to a model of your choice — local Ollama,
+DeepSeek, or anything on OpenRouter. The full design rationale is in
+[`specs.md`](specs.md); [`architecture.md`](architecture.md) documents every
+component.
+
+## Status
+
+Implemented and real-run verified: the **Recon → Hunt → Validate → Report**
+skeleton on a database with a separate validator that cannot file its own
+findings, plus the **producer–consumer loop** — Dedup, Gapfill, Feedback, and the
+loop wiring. The structure, state types, deterministic gates, model routing,
+schema, and instrumentation are real; `recon` and `hunt` are real two-phase
+agents.
+
+Still `NotImplementedError` stubs: `validate_bug`, `validate_reachability`,
+`report`, and the sandbox PoC-gate execution path — so a run currently drains the
+loop and then stops cleanly at `validate_bug` (exit 3). Cross-repo reachability
+tracing and an automated, human-gated Fixer are designed but unbuilt.
 
 ## Architecture
 
@@ -199,9 +250,9 @@ export RECON_LLM=openrouter                  # ollama | deepseek | openrouter | 
 export CRUCIBLE_MODEL_RECON=qwen/qwen-2.5-coder-32b-instruct
 ```
 
-Secrets: a `.env` at the repo root (gitignored; loaded automatically by
-`crucible run` / `status`) — `OPENROUTER_API_KEY=sk-or-...`,
-`DEEPSEEK_API_KEY=sk-...`, `LANGSMITH_API_KEY=...`.
+Secrets: `cp .env.example .env` and fill it in. `.env` is at the repo root
+(gitignored; loaded automatically by `crucible run` / `status`) —
+`OPENROUTER_API_KEY=sk-or-...`, `DEEPSEEK_API_KEY=sk-...`, `LANGSMITH_API_KEY=...`.
 
 ### Run
 
@@ -305,3 +356,7 @@ pytest tests/test_cli.py -v      # CLI smoke: help, status, run-to-stub
 Phase 0's single-session `security-audit` skill (§2); cross-repo Trace, VVS, and
 the human-gated Fixer (§15). Phase 2 (Gapfill / Dedup / Feedback / loop wiring,
 §11) **is** built — issues #19–#22.
+
+## License
+
+[MIT](LICENSE).

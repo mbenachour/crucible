@@ -3,9 +3,7 @@
 This document explains every component in the harness: what it is, what it does,
 its key types and functions, its current build status, and how it connects to its
 neighbours. It is the companion to [`specs.md`](specs.md) (the authoritative
-design) and [`README.md`](README.md) (the diagram and quick start). For *why each
-component exists commercially* — tied to the two Cloudflare articles — see
-[`product.md`](product.md).
+design) and [`README.md`](README.md) (the diagram and quick start).
 
 > **Naming note.** This file describes the *codebase*. There is a second,
 > unrelated `architecture.md` produced *at runtime* inside `workspace/` — that one

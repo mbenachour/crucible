@@ -2,7 +2,18 @@
 name = "crucible"
 version = "0.1.0"
 description = "Crucible — vulnerability discovery harness (Phase 1): Recon -> Hunt -> Validate -> Report"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Mohamed Benachour" }]
 requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Security",
+    "Topic :: Software Development :: Quality Assurance",
+]
 dependencies = [
     "langchain>=1.4,<2",
     "langgraph>=1.2,<2",
@@ -30,6 +41,10 @@ otel = [
     "opentelemetry-sdk>=1.25",
     "opentelemetry-exporter-otlp-proto-http>=1.25",
 ]
+
+[project.urls]
+Homepage = "https://github.com/mbenachour/crucible"
+Repository = "https://github.com/mbenachour/crucible"
 
 [project.scripts]
 crucible = "crucible.cli:app"

@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 .env
 .env.*
+!.env.example
 config.yaml
 config.yml
 crucible.toml
@@ -15,6 +16,8 @@ findings.sqlite*
 *-run.log
 .pytest_cache/
 .ruff_cache/
+.claude/settings.local.json
+.DS_Store
 *.o
 *.a
 *.egg-info/
