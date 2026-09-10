@@ -194,6 +194,7 @@ def serve(
     checkpoint_db: str = typer.Option("", "--checkpoint-db", help="LangGraph checkpoint DB"),
     workspace_root: str = typer.Option("", "--workspace-root", help="fallback workspace dir for older runs"),
     no_auth: bool = typer.Option(False, "--no-auth", help="allow a non-loopback bind with no token (trusted network only)"),
+    no_ui: bool = typer.Option(False, "--no-ui", help="serve the API only, not the bundled dashboard"),
     reload: bool = typer.Option(False, "--reload", help="uvicorn autoreload (dev)"),
 ) -> None:
     """Serve the read-first HTTP API over runs, findings, reports and artifacts."""
@@ -214,11 +215,16 @@ def serve(
         checkpoint_db=checkpoint_db or None,
         workspace_root=workspace_root or None,
         allow_no_auth=no_auth or None,
+        serve_ui=(not no_ui) if no_ui else None,
     )
     settings.validate()
     if not settings.auth_enabled:
         typer.secho("⚠  no auth token set — API is unauthenticated", fg=typer.colors.YELLOW)
-    typer.echo(f"crucible api  http://{settings.host}:{settings.port}  (docs: /docs)")
+    ui = settings.resolved_ui_dir()
+    typer.echo(
+        f"crucible api  http://{settings.host}:{settings.port}  (docs: /docs)"
+        + (f"  ·  dashboard: /  [{ui}]" if ui else "  ·  dashboard: not built (npm --prefix ui run build)")
+    )
     uvicorn.run(create_app(settings), host=settings.host, port=settings.port, reload=reload)
 
 

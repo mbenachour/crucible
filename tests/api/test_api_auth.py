@@ -20,6 +20,7 @@ def auth_client(store, workspace, tmp_path):
         workspace_root=str(tmp_path / "ws_a"),
         auth_token="full-secret",
         auth_token_readonly="ro-secret",
+        serve_ui=False,
     )
     app = create_app(settings)
     app.state.store = store

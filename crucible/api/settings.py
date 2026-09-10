@@ -4,10 +4,30 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
+
+import crucible
 
 
 def _split(val: str | None) -> list[str]:
     return [p.strip() for p in (val or "").split(",") if p.strip()]
+
+
+def _default_ui_dir() -> str:
+    """Where the built dashboard lives, if it has been built (issue #49).
+
+    Preference: an env override, then a packaged copy, then the repo's `ui/dist`.
+    """
+    env = os.environ.get("CRUCIBLE_API_UI_DIR")
+    if env:
+        return env
+    pkg = Path(crucible.__file__).parent / "api" / "ui_dist"
+    if (pkg / "index.html").is_file():
+        return str(pkg)
+    repo = Path(crucible.__file__).parent.parent / "ui" / "dist"
+    if (repo / "index.html").is_file():
+        return str(repo)
+    return ""
 
 
 @dataclass
@@ -23,6 +43,9 @@ class ApiSettings:
     auth_token_readonly: str = ""
     allow_no_auth: bool = False
     cors_origins: list[str] = field(default_factory=list)
+    # Built dashboard (issue #49). "" → not served. `serve_ui=False` → never serve.
+    ui_dir: str = ""
+    serve_ui: bool = True
 
     @classmethod
     def from_env(cls, **overrides) -> ApiSettings:
@@ -37,11 +60,18 @@ class ApiSettings:
             auth_token_readonly=env("CRUCIBLE_API_TOKEN_READONLY", ""),
             allow_no_auth=env("CRUCIBLE_API_ALLOW_NO_AUTH", "") == "1",
             cors_origins=_split(env("CRUCIBLE_API_CORS_ORIGINS", "")),
+            ui_dir=_default_ui_dir(),
+            serve_ui=env("CRUCIBLE_API_NO_UI", "") != "1",
         )
         for k, v in overrides.items():
             if v is not None:
                 setattr(base, k, v)
         return base
+
+    def resolved_ui_dir(self) -> str:
+        if not self.serve_ui:
+            return ""
+        return self.ui_dir or _default_ui_dir()
 
     @property
     def auth_enabled(self) -> bool:

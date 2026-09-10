@@ -375,6 +375,23 @@ Full reference — endpoints, auth, reverse-proxy setup, `curl` recipes:
 [`docs/api.md`](docs/api.md). Tracking: the
 [`API` milestone](https://github.com/mbenachour/crucible/milestone/6).
 
+### Dashboard
+
+A read-first web UI ([`ui/`](ui/)) — browse runs, drill into findings (threat
+model, PoC, patch diff, validation trail), read the report and recon artifacts,
+view the coverage matrix, watch execution state, work the wishlist.
+
+```bash
+npm --prefix ui install
+npm --prefix ui run build        # -> ui/dist
+crucible serve                   # serves the dashboard at / alongside the API
+```
+
+`crucible serve` auto-detects `ui/dist` (override with `CRUCIBLE_API_UI_DIR`,
+disable with `--no-ui`). Dev loop: `crucible serve` + `npm --prefix ui run dev`
+(Vite on :5173, proxying the API). Tracking: the
+[`UI` milestone](https://github.com/mbenachour/crucible/milestone/7).
+
 ## What Phase 1 "done" needs (specs.md §14)
 
 1. `crucible run --repo .../fixture-py` completes and emits a report

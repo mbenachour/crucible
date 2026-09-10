@@ -45,6 +45,14 @@ The API resolves a run's workspace from the `workspace_path` recorded on its
 `runs` row; runs created before that column existed fall back to
 `--workspace-root`.
 
+### Dashboard
+
+If `ui/dist` exists (`npm --prefix ui install && npm --prefix ui run build`),
+`crucible serve` also serves the web dashboard at `/`. Override the location with
+`CRUCIBLE_API_UI_DIR`, or run API-only with `--no-ui` / `CRUCIBLE_API_NO_UI=1`.
+Browser navigations to client routes (`Accept: text/html`) fall back to
+`index.html`; the SPA's own `fetch()` calls hit the API paths below unchanged.
+
 ---
 
 ## Endpoints
