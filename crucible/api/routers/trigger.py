@@ -48,9 +48,11 @@ def trigger_run(
     except RepoRefError as e:
         raise ApiError(422, "invalid repo", str(e)) from e
 
-    # A launch stuck mid-clone (its process died without updating status)
-    # would otherwise permanently occupy a concurrency slot.
+    # A launch stuck mid-clone, or any run whose process died / was abandoned
+    # (crashed, killed terminal, or predates this reaper entirely) would
+    # otherwise permanently occupy a concurrency slot.
     store.sweep_stuck_launches(2 * settings.clone_timeout_s)
+    store.reap_dead_runs(stale_after_s=settings.stale_run_s)
 
     active = store.count_active_runs()
     if active >= settings.max_concurrent_runs:

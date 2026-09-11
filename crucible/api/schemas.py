@@ -50,7 +50,9 @@ class RunOut(BaseModel):
     workspace_path: str = ""
     report_available: bool = False
     counts: dict[str, int] = Field(default_factory=dict)
-    # API-triggered launches (issue #57) — empty for a run started via the CLI.
+    # API-triggered launches (issue #57) — source_spec/clone_status are empty
+    # for a run started via the CLI. clone_error also carries the reap reason
+    # (dao.reap_dead_runs) when a stale/dead run gets closed out automatically.
     source_spec: str = ""
     clone_status: str = ""
     clone_error: str = ""
