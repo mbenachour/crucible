@@ -134,7 +134,9 @@ export function NewRunModal({
           {fieldError && <div className="banner bad">{fieldError}</div>}
           {serverMessage && <div className="banner bad">{serverMessage}</div>}
           {!hasToken && (
-            <div className="dim">Triggering a run needs a write token — set one in the top bar.</div>
+            <div className="dim">
+              No token set — fine if this API has no auth configured; if it does, set a write token in the top bar.
+            </div>
           )}
         </div>
 
@@ -142,12 +144,7 @@ export function NewRunModal({
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button
-            type="submit"
-            className="primary"
-            disabled={!hasToken || trigger.isPending || !repo.trim()}
-            title={hasToken ? "" : "needs a write token"}
-          >
+          <button type="submit" className="primary" disabled={trigger.isPending || !repo.trim()}>
             {trigger.isPending ? "starting…" : "Start run"}
           </button>
         </div>
