@@ -81,4 +81,18 @@ def _mount_ui(app, settings: ApiSettings) -> None:
             return FileResponse(index)
         return resp
 
-    app.mount("/", StaticFiles(directory=ui_dir, html=True), name="ui")
+    static_app = StaticFiles(directory=ui_dir, html=True)
+
+    async def _http_only_static(scope, receive, send):
+        # StaticFiles only implements the "http" ASGI scope and asserts on
+        # anything else. A stray WebSocket handshake against "/" (a browser
+        # extension, devtools, whatever) must not raise past the mount and
+        # bypass our exception handling — close it cleanly instead.
+        if scope["type"] == "websocket":
+            await send({"type": "websocket.close", "code": 1000})
+            return
+        if scope["type"] != "http":
+            return
+        await static_app(scope, receive, send)
+
+    app.mount("/", _http_only_static, name="ui")
