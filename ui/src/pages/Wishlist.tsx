@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useResolveWish, useRunWishes, useWishes } from "../api/hooks";
-import { auth, ApiError } from "../api/client";
+import { ApiError } from "../api/client";
 import { Q } from "../components/states";
 import { Time } from "../components/bits";
 import type { Wish } from "../api/types";
@@ -65,7 +65,6 @@ function groupByRun(items: Wish[], scoped: boolean): [string, Wish[]][] {
 function WishCard({ w }: { w: Wish }) {
   const [note, setNote] = useState("");
   const resolve = useResolveWish();
-  const hasToken = !!auth.getToken();
   const forbidden = resolve.error instanceof ApiError && resolve.error.status === 403;
 
   return (
@@ -85,15 +84,14 @@ function WishCard({ w }: { w: Wish }) {
           <input placeholder="note (optional)" value={note} onChange={(e) => setNote(e.target.value)} style={{ flex: 1 }} />
           <button
             className="primary"
-            disabled={!hasToken || resolve.isPending}
-            title={hasToken ? "" : "needs a write token (set it in the top bar)"}
+            disabled={resolve.isPending}
             onClick={() => resolve.mutate({ id: w.id, note: note || undefined })}
           >
             {resolve.isPending ? "resolving…" : "resolve"}
           </button>
         </div>
       )}
-      {forbidden && <div className="dim" style={{ marginTop: 6, color: "var(--bad-fg)" }}>needs a write token</div>}
+      {forbidden && <div className="dim" style={{ marginTop: 6, color: "var(--bad-fg)" }}>needs a write token — set one in the top bar</div>}
       <div className="dim" style={{ marginTop: 6 }}>
         Resolving does not re-run the task — do that with <code>crucible run --resume {w.run_id}</code>.
       </div>

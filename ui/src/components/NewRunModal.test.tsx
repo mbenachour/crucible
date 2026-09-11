@@ -32,17 +32,22 @@ describe("NewRunModal", () => {
     auth.setToken("");
   });
 
-  it("disables submit without a token", () => {
+  it("does not require a token client-side — the server is the source of truth on auth", () => {
+    // Most deployments (crucible serve --no-auth, the default for local use)
+    // have no auth configured at all; disabling on "no token stored" would
+    // make the button permanently greyed out for them. A 401/403 from the
+    // server (if auth *is* on) is what actually gates this — see the
+    // response-class tests below.
     renderModal();
-    expect((screen.getByText("Start run") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByPlaceholderText(/owner\/repo/i), { target: { value: "octocat/Hello-World" } });
+    expect((screen.getByText("Start run") as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByText(/no auth configured/i)).toBeTruthy();
   });
 
-  it("prefills repo/ref and enables submit once a token is set", () => {
-    auth.setToken("tok");
+  it("prefills repo/ref from the prefill prop", () => {
     renderModal({ prefill: { repo: "octocat/Hello-World", ref: "main" } });
     expect((screen.getByPlaceholderText(/owner\/repo/i) as HTMLInputElement).value).toBe("octocat/Hello-World");
     expect((screen.getByPlaceholderText("branch or tag") as HTMLInputElement).value).toBe("main");
-    expect((screen.getByText("Start run") as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("shows a field error for an obviously-bad repo without calling the API", () => {
