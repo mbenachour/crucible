@@ -366,6 +366,7 @@ crucible serve                   # 127.0.0.1:8787 — docs at /docs, schema at /
 | `GET /runs/{id}/state` | execution state — `pending_hunts`, `cycle_count`, `recon_quality`, next node |
 | `GET /runs/{id}/artifacts[/{path}]` | index + raw workspace file (traversal-guarded) |
 | `GET /runs/{id}/architecture` · `/recon/{seed,module-map,threat-model,attack-surface,task-manifest}` · `/dedup/clusters` · `/log` | typed artifact shortcuts |
+| `GET /runs/{id}/log/stream` | **live-tail** `run.log` — chunked HTTP, real-time while a run is in progress |
 | `GET /runs/{id}/wishes` · `GET /wishes` · `POST /wishes/{id}/resolve` | blocked-task wishlist (§9.3) |
 
 Auth is off on a loopback bind. Set `CRUCIBLE_API_TOKEN` (and optionally
@@ -384,9 +385,10 @@ Full reference — endpoints, auth, reverse-proxy setup, `curl` recipes:
 ### Dashboard
 
 A web UI ([`ui/`](ui/)) — trigger a run from a **+ New run** modal (repo + optional
-ref), browse runs, drill into findings (threat model, PoC, patch diff,
-validation trail), read the report and recon artifacts, view the coverage
-matrix, watch execution state, work the wishlist.
+ref), watch it **live in the Logs tab** as it clones and runs, browse runs,
+drill into findings (threat model, PoC, patch diff, validation trail), read
+the report and recon artifacts, view the coverage matrix, watch execution
+state, work the wishlist.
 
 ```bash
 npm --prefix ui install
