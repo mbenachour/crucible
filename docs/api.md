@@ -64,8 +64,9 @@ Interactive reference: **`/docs`** (Swagger UI), raw schema **`/openapi.json`**
 
 | Method & path | Notes |
 |---|---|
+| `POST /runs` | **trigger a run** — clone a repo and launch `crucible run` (see [Triggering runs](#triggering-runs) below) |
 | `GET /runs` | filters: `repo` (substring), `outcome`, `language`, `since` (ISO-8601). Newest first. |
-| `GET /runs/{run_id}` | detail + funnel `counts` (`raw`, `mechanical_failed`, `bug_upheld`, `reach_upheld`, `duplicate`, … + `total`) |
+| `GET /runs/{run_id}` | detail + funnel `counts` (`raw`, `mechanical_failed`, `bug_upheld`, `reach_upheld`, `duplicate`, … + `total`), plus `source_spec` / `clone_status` / `clone_error` for an API-triggered run |
 | `GET /runs/{run_id}/report` | parsed `report.json`; `404` if the report node hasn't run |
 | `GET /runs/{run_id}/report.md` | `text/plain` |
 | `GET /runs/{run_id}/metrics` | funnel counts, `fork_rate` (`forks/hunt_exec`), per-tool usage, and `cycles`/`continuations`/`token_spend` (from the report when present) |
@@ -115,6 +116,57 @@ Interactive reference: **`/docs`** (Swagger UI), raw schema **`/openapi.json`**
 ### Meta
 
 `GET /health` → `{status, version, store_ok}` — always open, no auth.
+
+---
+
+## Triggering runs
+
+The one endpoint that mutates anything, reaches the network, and spawns a
+process. Everything else in this document is a `GET` against a database or the
+filesystem; `POST /runs` fetches a **user-supplied git URL** and shells out to
+`git clone`, then launches `crucible run`. Treat it accordingly.
+
+```bash
+curl -X POST "$API/runs" -H "Authorization: Bearer $CRUCIBLE_API_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"repo": "octocat/Hello-World", "ref": "main"}'
+# -> 202 {"run_id": "4ae4e9098a19", "clone_status": "pending"}
+# Location: /runs/4ae4e9098a19
+```
+
+- `repo` — `owner/repo` (resolved against `github.com`) or a full `https://` URL.
+- `ref` — optional branch/tag/commit.
+- Returns **`202`** immediately with a `run_id` — cloning and the run itself
+  happen in the background. Poll `GET /runs/{run_id}` for `clone_status`
+  (`pending → cloning → cloned` or `clone_failed` + `clone_error`), then treat
+  it like any other run once `cloned`.
+- **Write token required** (§ Auth above) — same token as `POST
+  /wishes/{id}/resolve`. **This token can clone arbitrary public repos and
+  spawn processes on this host — treat it like a deploy credential, not a
+  read/write-findings toggle.**
+- `422` — bad input: empty/malformed `repo`, a scheme other than `https://`, a
+  host not on the allowlist, an IP-literal/loopback/link-local host, or a `ref`
+  with shell-metacharacter-shaped content. Every one of these is rejected
+  **before** any subprocess runs.
+- `429` — too many runs already in progress (`CRUCIBLE_API_MAX_CONCURRENT_RUNS`).
+
+### Env vars
+
+| Var | Default | Meaning |
+|---|---|---|
+| `CRUCIBLE_API_RUNS_DIR` | `.crucible-runs` | where clones + per-run workspaces land: `<dir>/<run_id>/{repo,workspace}` |
+| `CRUCIBLE_API_ALLOWED_GIT_HOSTS` | `github.com,gitlab.com,bitbucket.org` | the only hosts a clone may target. IP literals, loopback, and private/link-local ranges are hard-blocked regardless of this list. |
+| `CRUCIBLE_API_MAX_CONCURRENT_RUNS` | `2` | runs with no `finished_at` allowed at once; a launch stuck cloning past `2 x` the timeout is swept and no longer counts |
+| `CRUCIBLE_API_CLONE_TIMEOUT_S` | `120` | `git clone` timeout |
+| `CRUCIBLE_API_CLONE_MAX_MB` | `500` | working-tree size cap, enforced after a shallow clone; over cap deletes the clone and fails the run |
+
+### v1 limitations (by design)
+
+- **Public repos only** — no credential/SSH-key handling for a private target
+  repo yet.
+- **No cancel** — once launched, a run finishes or fails on its own; there is
+  no `DELETE`/kill endpoint.
+- **No scheduling** — one-shot, triggered synchronously by the caller.
 
 ---
 

@@ -59,6 +59,10 @@ crucible = ["skills/**/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not network'"
+markers = [
+    "network: requires internet access (a real git clone) — opt in with `pytest -m network`",
+]
 
 [tool.ruff]
 line-length = 100

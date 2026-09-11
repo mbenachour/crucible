@@ -88,3 +88,48 @@ def test_run_completes_end_to_end_and_emits_report(tmp_path, monkeypatch, repo_w
 
     rows = list(sqlite3.connect(store).execute("select primary_language, status from runs"))
     assert rows and rows[0][0] == "py"
+
+
+def test_run_id_flag_fills_in_a_pre_registered_row(tmp_path, monkeypatch, repo_web):
+    """The API launcher (issue #57) inserts a `Run` row before the repo is even
+    cloned, then invokes `crucible run --run-id <id>`. The CLI must update that
+    row in place rather than fail on a duplicate insert."""
+    monkeypatch.chdir(tmp_path)
+    for var in _HERMETIC_ENV:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("CRUCIBLE_OLLAMA_BASE_URL", "http://127.0.0.1:1")
+    monkeypatch.setenv("CRUCIBLE_RECON_MAX_PARALLEL", "1")
+
+    from crucible.store.dao import Store
+
+    store_path = tmp_path / "findings.sqlite"
+    store = Store(f"sqlite:///{store_path}")
+    store.create_launch("abc123", "octocat/Hello-World")
+
+    ws = tmp_path / "ws"
+    r = runner.invoke(app, [
+        "run",
+        "--repo", str(repo_web),
+        "--workspace", str(ws),
+        "--checkpoint-db", str(tmp_path / "ckpt.sqlite"),
+        "--store-url", f"sqlite:///{store_path}",
+        "--run-id", "abc123",
+        "--no-sandbox",
+        "--stop-after", "recon",
+    ])
+
+    assert r.exit_code == 3, r.output  # clean --stop-after exit
+    assert "run_id=abc123" in r.output
+
+    row = store.get_run("abc123")
+    assert row is not None
+    assert row.repo_path == str(repo_web)
+    assert row.clone_status == "pending"  # untouched — the CLI only fills in repo info
+    rows = list(sqlite3.connect(store_path).execute("select run_id from runs"))
+    assert rows == [("abc123",)]  # no duplicate row
+
+
+def test_run_id_and_resume_are_mutually_exclusive():
+    r = runner.invoke(app, ["run", "--repo", ".", "--run-id", "a", "--resume", "b"])
+    assert r.exit_code != 0
+    assert "not both" in r.output

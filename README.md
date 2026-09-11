@@ -355,6 +355,7 @@ crucible serve                   # 127.0.0.1:8787 — docs at /docs, schema at /
 
 | Endpoint | Returns |
 |---|---|
+| `POST /runs` | **trigger a run** — clone `{repo, ref?}` and launch `crucible run`; `202` + `run_id` (write token required — see caveat below) |
 | `GET /runs` · `GET /runs/{id}` | run list / detail + funnel counts |
 | `GET /runs/{id}/report` · `/report.md` | the deterministic report (JSON / Markdown) |
 | `GET /runs/{id}/metrics` | funnel counts, fork rate, per-tool usage |
@@ -369,17 +370,23 @@ crucible serve                   # 127.0.0.1:8787 — docs at /docs, schema at /
 
 Auth is off on a loopback bind. Set `CRUCIBLE_API_TOKEN` (and optionally
 `CRUCIBLE_API_TOKEN_READONLY`) to require a bearer token; binding a non-loopback
-address without one is refused unless `--no-auth` is passed.
+address without one is refused unless `--no-auth` is passed. `POST /runs` is
+the one action that fetches attacker-influenced content (a git URL) and spawns
+a process — its write token should be treated like a deploy credential; see
+[Triggering runs](docs/api.md#triggering-runs) for the host allowlist,
+concurrency cap, and size/time limits that gate it.
 
 Full reference — endpoints, auth, reverse-proxy setup, `curl` recipes:
 [`docs/api.md`](docs/api.md). Tracking: the
-[`API` milestone](https://github.com/mbenachour/crucible/milestone/6).
+[`API` milestone](https://github.com/mbenachour/crucible/milestone/6) and the
+[`Trigger` milestone](https://github.com/mbenachour/crucible/milestone/8).
 
 ### Dashboard
 
-A read-first web UI ([`ui/`](ui/)) — browse runs, drill into findings (threat
-model, PoC, patch diff, validation trail), read the report and recon artifacts,
-view the coverage matrix, watch execution state, work the wishlist.
+A web UI ([`ui/`](ui/)) — trigger a run from a **+ New run** modal (repo + optional
+ref), browse runs, drill into findings (threat model, PoC, patch diff,
+validation trail), read the report and recon artifacts, view the coverage
+matrix, watch execution state, work the wishlist.
 
 ```bash
 npm --prefix ui install

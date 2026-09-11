@@ -50,6 +50,10 @@ class RunOut(BaseModel):
     workspace_path: str = ""
     report_available: bool = False
     counts: dict[str, int] = Field(default_factory=dict)
+    # API-triggered launches (issue #57) — empty for a run started via the CLI.
+    source_spec: str = ""
+    clone_status: str = ""
+    clone_error: str = ""
 
 
 class MetricsOut(BaseModel):

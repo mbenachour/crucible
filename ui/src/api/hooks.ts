@@ -8,12 +8,16 @@ import type {
   Page,
   Run,
   RunState,
+  TriggerRunIn,
+  TriggerRunOut,
   Validation,
   Wish,
   ArtifactMeta,
 } from "./types";
 
 type Q = Record<string, string | number | boolean | undefined | (string | number)[]>;
+
+const LAUNCHING = new Set(["pending", "cloning"]);
 
 export const useHealth = () =>
   useQuery({ queryKey: ["health"], queryFn: () => apiFetch<Health>("/health"), retry: false });
@@ -22,10 +26,25 @@ export const useRuns = (query: Q) =>
   useQuery({
     queryKey: ["runs", query],
     queryFn: () => apiFetch<Page<Run>>("/runs", { query }),
+    // keep list rows (badges) live while anything in view might still be launching
+    refetchInterval: (q) => (q.state.data?.items.some((r) => LAUNCHING.has(r.clone_status)) ? 2000 : false),
   });
 
 export const useRun = (runId: string) =>
-  useQuery({ queryKey: ["run", runId], queryFn: () => apiFetch<Run>(`/runs/${runId}`) });
+  useQuery({
+    queryKey: ["run", runId],
+    queryFn: () => apiFetch<Run>(`/runs/${runId}`),
+    // poll while a triggered run is still being cloned; stop once cloned/failed
+    refetchInterval: (q) => (LAUNCHING.has(q.state.data?.clone_status ?? "") ? 2000 : false),
+  });
+
+export function useTriggerRun() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: TriggerRunIn) => apiFetch<TriggerRunOut>("/runs", { method: "POST", body }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["runs"] }),
+  });
+}
 
 export const useMetrics = (runId: string) =>
   useQuery({

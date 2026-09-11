@@ -10,6 +10,20 @@ export const Status = ({ v }: { v: string }) => <span className={statusClass(v)}
 export const OutcomeTag = ({ v }: { v: string }) =>
   v ? <span className={outcomeClass(v)}>{v}</span> : <span className="dim">running</span>;
 
+/** Prefer this over OutcomeTag whenever a row might be an in-flight launch. */
+export function StatusOrLaunchTag({ outcome, cloneStatus }: { outcome: string; cloneStatus?: string }) {
+  switch (cloneStatus) {
+    case "pending":
+      return <span className="tag tag-neutral">queued</span>;
+    case "cloning":
+      return <span className="tag tag-neutral">cloning…</span>;
+    case "clone_failed":
+      return <span className="tag tag-bad">clone failed</span>;
+    default:
+      return <OutcomeTag v={outcome} />;
+  }
+}
+
 export const Time = ({ v }: { v: string | null | undefined }) => (
   <span title={absTime(v)}>{relTime(v)}</span>
 );

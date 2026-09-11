@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import crucible
 from crucible.api import errors
-from crucible.api.routers import artifacts, findings, health, runs, state, wishlist
+from crucible.api.routers import artifacts, findings, health, runs, state, trigger, wishlist
 from crucible.api.settings import ApiSettings
 from crucible.store.dao import Store
 
@@ -42,7 +42,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:  # noqa: F821 (l
 
     errors.install(app)
     for r in (health.router, runs.router, findings.router, artifacts.router,
-              state.router, wishlist.router):
+              state.router, wishlist.router, trigger.router):
         app.include_router(r)
 
     _mount_ui(app, settings)

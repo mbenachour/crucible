@@ -3,6 +3,8 @@ import { NavLink, Outlet } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { auth } from "../api/client";
 import { useHealth } from "../api/hooks";
+import { NewRunModal, type NewRunPrefill } from "./NewRunModal";
+import { NewRunModalContext } from "../lib/newRunModal";
 
 function useTheme(): [string, (t: string) => void] {
   const [theme, setTheme] = useState<string>(() => {
@@ -41,6 +43,8 @@ export function Shell() {
   const [base, setBase] = useState(auth.getBase());
   const [token, setToken] = useState(auth.getToken());
   const [theme, setTheme] = useTheme();
+  const [newRunOpen, setNewRunOpen] = useState(false);
+  const [newRunPrefill, setNewRunPrefill] = useState<NewRunPrefill | undefined>(undefined);
 
   function applyConn() {
     auth.setBase(base);
@@ -51,11 +55,22 @@ export function Shell() {
   const link = ({ isActive }: { isActive: boolean }) => (isActive ? "active" : "");
 
   return (
+    <NewRunModalContext.Provider
+      value={{
+        open: (prefill) => {
+          setNewRunPrefill(prefill);
+          setNewRunOpen(true);
+        },
+      }}
+    >
     <div className="shell">
       <div className="topbar">
         <span className="brand">CRUCIBLE</span>
         <HealthDot />
         <span className="spacer" />
+        <button className="primary" onClick={() => { setNewRunPrefill(undefined); setNewRunOpen(true); }}>
+          + New run
+        </button>
         <input
           aria-label="API base URL"
           placeholder="API base (/)"
@@ -93,6 +108,8 @@ export function Shell() {
           <Outlet />
         </div>
       </div>
+      <NewRunModal open={newRunOpen} onClose={() => setNewRunOpen(false)} prefill={newRunPrefill} />
     </div>
+    </NewRunModalContext.Provider>
   );
 }

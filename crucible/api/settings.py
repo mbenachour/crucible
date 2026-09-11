@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import crucible
+from crucible.repo_acquire import DEFAULT_ALLOWED_HOSTS
 
 
 def _split(val: str | None) -> list[str]:
@@ -46,6 +47,13 @@ class ApiSettings:
     # Built dashboard (issue #49). "" → not served. `serve_ui=False` → never serve.
     ui_dir: str = ""
     serve_ui: bool = True
+    # Triggering runs (issue #57/#63). Where clones + per-run workspaces land,
+    # which git hosts a clone may target, and the abuse caps.
+    runs_dir: str = ".crucible-runs"
+    allowed_git_hosts: list[str] = field(default_factory=lambda: list(DEFAULT_ALLOWED_HOSTS))
+    max_concurrent_runs: int = 2
+    clone_timeout_s: int = 120
+    clone_max_mb: int = 500
 
     @classmethod
     def from_env(cls, **overrides) -> ApiSettings:
@@ -62,6 +70,12 @@ class ApiSettings:
             cors_origins=_split(env("CRUCIBLE_API_CORS_ORIGINS", "")),
             ui_dir=_default_ui_dir(),
             serve_ui=env("CRUCIBLE_API_NO_UI", "") != "1",
+            runs_dir=env("CRUCIBLE_API_RUNS_DIR", cls.runs_dir),
+            allowed_git_hosts=_split(env("CRUCIBLE_API_ALLOWED_GIT_HOSTS", ",".join(DEFAULT_ALLOWED_HOSTS)))
+            or list(DEFAULT_ALLOWED_HOSTS),
+            max_concurrent_runs=int(env("CRUCIBLE_API_MAX_CONCURRENT_RUNS", cls.max_concurrent_runs)),
+            clone_timeout_s=int(env("CRUCIBLE_API_CLONE_TIMEOUT_S", cls.clone_timeout_s)),
+            clone_max_mb=int(env("CRUCIBLE_API_CLONE_MAX_MB", cls.clone_max_mb)),
         )
         for k, v in overrides.items():
             if v is not None:

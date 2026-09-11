@@ -26,6 +26,8 @@ export type Outcome =
   | "failed"
   | "";
 
+export type CloneStatus = "" | "pending" | "cloning" | "cloned" | "clone_failed";
+
 export interface Run {
   run_id: string;
   repo_path: string;
@@ -39,6 +41,20 @@ export interface Run {
   workspace_path: string;
   report_available: boolean;
   counts: Record<string, number>;
+  // API-triggered launches (milestone: Trigger) — empty for a CLI-started run.
+  source_spec: string;
+  clone_status: CloneStatus;
+  clone_error: string;
+}
+
+export interface TriggerRunIn {
+  repo: string;
+  ref?: string;
+}
+
+export interface TriggerRunOut {
+  run_id: string;
+  clone_status: CloneStatus;
 }
 
 export interface Metrics {
