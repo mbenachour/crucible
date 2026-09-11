@@ -48,6 +48,17 @@ def test_api_routes_still_win(ui_client):
     assert r.json()["error"] == "run not found"
 
 
+def test_websocket_against_the_static_mount_closes_cleanly(ui_client):
+    # A stray WebSocket handshake at "/" (some browser extension/devtools probe —
+    # nothing in our own UI code opens one) must not crash the ASGI app with an
+    # unhandled AssertionError out of StaticFiles; it should just be closed.
+    from starlette.websockets import WebSocketDisconnect
+
+    with pytest.raises(WebSocketDisconnect):
+        with ui_client.websocket_connect("/"):
+            pass
+
+
 def test_no_ui_flag_disables_mount(store):
     from fastapi.testclient import TestClient
 
