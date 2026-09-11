@@ -32,6 +32,15 @@ def run(
     store_url: str = typer.Option("sqlite:///findings.sqlite", "--store-url"),
     config: str = typer.Option("", "--config", help="path to config.yaml or crucible.toml"),
     resume: str = typer.Option("", "--resume", help="run_id to resume from checkpoint"),
+    run_id_flag: str = typer.Option(
+        "", "--run-id",
+        help=(
+            "use exactly this run id, starting fresh (no checkpoint expected). "
+            "For a Run row pre-registered by the API launcher (issue #57) — "
+            "the existing row is updated in place rather than re-created. "
+            "Mutually exclusive with --resume."
+        ),
+    ),
     no_sandbox: bool = typer.Option(False, "--no-sandbox", help="skip Docker sandbox boot check"),
     stop_after: str = typer.Option(
         "",
@@ -62,8 +71,10 @@ def run(
         raise typer.BadParameter(
             f"must be one of: {', '.join(STAGE_NODES)}", param_hint="--stop-after"
         )
+    if run_id_flag and resume:
+        raise typer.BadParameter("pass one of --run-id or --resume, not both", param_hint="--run-id")
 
-    run_id = resume or uuid.uuid4().hex[:12]
+    run_id = run_id_flag or resume or uuid.uuid4().hex[:12]
     init_workspace(workspace)
 
     log = configure_logging(workspace)
@@ -94,7 +105,13 @@ def run(
         log.debug("model[%s] = %s:%s", role.value, ep.provider.value, ep.model)
 
     if not resume:
-        store.create_run(run_id, str(repo), repo_commit, language, str(workspace.resolve()))
+        existing = store.get_run(run_id)
+        if existing is None:
+            store.create_run(run_id, str(repo), repo_commit, language, str(workspace.resolve()))
+        else:
+            # pre-registered by the API launcher (--run-id, issue #57) — the row
+            # existed before the repo was even cloned; fill in what it now knows.
+            store.set_repo_info(run_id, str(repo), repo_commit, str(workspace.resolve()))
 
     deps = NodeDeps(
         registry=registry,

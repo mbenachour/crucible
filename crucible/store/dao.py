@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import case, create_engine, func, inspect, select, text
 from sqlalchemy.orm import Session, sessionmaker
@@ -29,6 +29,10 @@ _RUNS_ADDED_COLUMNS = {
     "finished_at": "DATETIME",
     "outcome": "VARCHAR DEFAULT ''",
     "report_path": "VARCHAR DEFAULT ''",
+    "source_spec": "VARCHAR DEFAULT ''",
+    "clone_status": "VARCHAR DEFAULT ''",
+    "clone_error": "VARCHAR DEFAULT ''",
+    "pid": "INTEGER",
 }
 
 _MAX_LIMIT = 1000
@@ -106,6 +110,72 @@ class Store:
             r.finished_at = datetime.now(UTC)
             if report_path:
                 r.report_path = report_path
+
+    # --- API-triggered launches (issue #57) -----------------------------
+    #
+    # A launch's Run row exists *before* the repo is cloned, so a run_id is
+    # available to the caller (and pollable via GET /runs/{id}) immediately.
+
+    def create_launch(self, run_id: str, source_spec: str) -> None:
+        with self.session() as s:
+            s.add(Run(run_id=run_id, repo_path="", repo_commit="", primary_language="",
+                      source_spec=source_spec, clone_status="pending"))
+
+    def set_clone_status(self, run_id: str, status: str, error: str = "") -> None:
+        with self.session() as s:
+            r = s.get(Run, run_id)
+            if r is None:
+                return
+            r.clone_status = status
+            if error:
+                r.clone_error = error[:2000]
+
+    def set_pid(self, run_id: str, pid: int) -> None:
+        with self.session() as s:
+            r = s.get(Run, run_id)
+            if r:
+                r.pid = pid
+
+    def set_repo_info(self, run_id: str, repo_path: str, repo_commit: str, workspace_path: str) -> None:
+        """Called by `crucible run --run-id` once the pre-registered row's
+        repo is actually on disk (the launcher only knew the clone dest, not
+        the resolved commit, at row-creation time)."""
+        with self.session() as s:
+            r = s.get(Run, run_id)
+            if r is None:
+                return
+            r.repo_path = repo_path
+            r.repo_commit = repo_commit
+            r.workspace_path = workspace_path
+
+    def count_active_runs(self) -> int:
+        """Runs with no `finished_at` — the concurrency-cap signal (issue #63)."""
+        with self.read_session() as s:
+            return int(s.scalar(
+                select(func.count()).select_from(Run).where(Run.finished_at.is_(None))
+            ) or 0)
+
+    def sweep_stuck_launches(self, older_than_s: int) -> int:
+        """A launch stuck in `pending`/`cloning` past `older_than_s` (the
+        clone process died without updating status) is swept to
+        `clone_failed` so it stops occupying a concurrency slot. Returns the
+        number swept."""
+        cutoff = datetime.now(UTC) - timedelta(seconds=older_than_s)
+        with self.session() as s:
+            stuck = list(s.scalars(
+                select(Run).where(
+                    Run.clone_status.in_(["pending", "cloning"]),
+                    Run.finished_at.is_(None),
+                    Run.created_at < cutoff,
+                )
+            ))
+            for r in stuck:
+                r.clone_status = "clone_failed"
+                r.clone_error = "launch timed out (stuck clone/launch, swept)"
+                r.outcome = "failed"
+                r.status = "finished"
+                r.finished_at = datetime.now(UTC)
+            return len(stuck)
 
     def add_finding(self, row: FindingRow) -> None:
         with self.session() as s:

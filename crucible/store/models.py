@@ -39,6 +39,13 @@ class Run(Base):
     outcome: Mapped[str] = mapped_column(String, default="")  # completed | stopped_at_stub | stopped_after_stage | failed
     report_path: Mapped[str] = mapped_column(String, default="")
 
+    # API-triggered launches (issue #57): the row exists before the repo is
+    # even cloned, so the UI has a run_id to poll from the first response.
+    source_spec: Mapped[str] = mapped_column(String, default="")  # the user's "owner/repo" or URL input
+    clone_status: Mapped[str] = mapped_column(String, default="")  # "" | pending | cloning | cloned | clone_failed
+    clone_error: Mapped[str] = mapped_column(String, default="")
+    pid: Mapped[int | None] = mapped_column(Integer, nullable=True)  # the spawned `crucible run` process
+
     findings: Mapped[list["FindingRow"]] = relationship(back_populates="run")
 
 

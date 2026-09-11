@@ -1,7 +1,9 @@
 # Crucible dashboard
 
-A read-first web UI over the Crucible HTTP API (`crucible serve`). Vite + React +
-TypeScript, no external calls — everything is bundled.
+A web UI over the Crucible HTTP API (`crucible serve`). Vite + React +
+TypeScript, no external calls — everything is bundled. Mostly read-only; the
+**+ New run** button (top bar / Runs page) is the one write action — it opens a
+modal for a repo + optional ref and `POST /runs`s it (needs a write token).
 
 ## Develop
 
@@ -36,7 +38,7 @@ read-only one.
 src/
   api/       client (fetch wrapper + bearer token), types (mirror schemas.py), react-query hooks
   components/ Shell, states (Loading/Empty/ErrorState/Q), badges, DiffView, Markdown, JsonView, CoverageMatrix
-  lib/       formatting, url-state helper
+  lib/       formatting, url-state helper, the New-run-modal context (so any page can open it, prefilled)
   pages/     Runs, RunLayout+Overview, Findings+FindingDetail, Report, Recon, Coverage, RunState, Wishlist, Artifacts
 ```
 

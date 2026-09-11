@@ -503,6 +503,16 @@
       },
       "RunOut": {
         "properties": {
+          "clone_error": {
+            "default": "",
+            "title": "Clone Error",
+            "type": "string"
+          },
+          "clone_status": {
+            "default": "",
+            "title": "Clone Status",
+            "type": "string"
+          },
           "counts": {
             "additionalProperties": {
               "type": "integer"
@@ -562,6 +572,11 @@
           },
           "run_id": {
             "title": "Run Id",
+            "type": "string"
+          },
+          "source_spec": {
+            "default": "",
+            "title": "Source Spec",
             "type": "string"
           },
           "status": {
@@ -718,6 +733,52 @@
           "assumption_broken"
         ],
         "title": "ThreatModel",
+        "type": "object"
+      },
+      "TriggerRunIn": {
+        "properties": {
+          "ref": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "branch, tag, or commit",
+            "title": "Ref"
+          },
+          "repo": {
+            "description": "'owner/repo' or a full https:// git URL",
+            "maxLength": 200,
+            "title": "Repo",
+            "type": "string"
+          }
+        },
+        "required": [
+          "repo"
+        ],
+        "title": "TriggerRunIn",
+        "type": "object"
+      },
+      "TriggerRunOut": {
+        "properties": {
+          "clone_status": {
+            "title": "Clone Status",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "clone_status"
+        ],
+        "title": "TriggerRunOut",
         "type": "object"
       },
       "ValidationError": {
@@ -1179,6 +1240,45 @@
         "summary": "List Runs",
         "tags": [
           "runs"
+        ]
+      },
+      "post": {
+        "operationId": "trigger_run_runs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TriggerRunIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerRunOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Trigger Run",
+        "tags": [
+          "trigger"
         ]
       }
     },
