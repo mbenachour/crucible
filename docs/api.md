@@ -156,9 +156,16 @@ curl -X POST "$API/runs" -H "Authorization: Bearer $CRUCIBLE_API_TOKEN" \
 |---|---|---|
 | `CRUCIBLE_API_RUNS_DIR` | `.crucible-runs` | where clones + per-run workspaces land: `<dir>/<run_id>/{repo,workspace}` |
 | `CRUCIBLE_API_ALLOWED_GIT_HOSTS` | `github.com,gitlab.com,bitbucket.org` | the only hosts a clone may target. IP literals, loopback, and private/link-local ranges are hard-blocked regardless of this list. |
-| `CRUCIBLE_API_MAX_CONCURRENT_RUNS` | `2` | runs with no `finished_at` allowed at once; a launch stuck cloning past `2 x` the timeout is swept and no longer counts |
-| `CRUCIBLE_API_CLONE_TIMEOUT_S` | `120` | `git clone` timeout |
+| `CRUCIBLE_API_MAX_CONCURRENT_RUNS` | `2` | runs with no `finished_at` allowed at once |
+| `CRUCIBLE_API_CLONE_TIMEOUT_S` | `120` | `git clone` timeout; a launch stuck cloning past `2 x` this is swept and no longer counts |
 | `CRUCIBLE_API_CLONE_MAX_MB` | `500` | working-tree size cap, enforced after a shallow clone; over cap deletes the clone and fails the run |
+| `CRUCIBLE_API_STALE_RUN_S` | `21600` (6h) | a run with no `finished_at`, no live pid recorded (or none at all — a plain `crucible run` from the CLI never records one), and no activity for this long is assumed abandoned and closed out (`outcome=stale`) so it stops permanently occupying a concurrency slot. A run with a **live** recorded pid is never reaped on age alone, however old. |
+
+Every `POST /runs` call sweeps stuck clones and reaps dead/stale runs *before*
+checking the concurrency cap — so `"N/2 active — try again shortly"` should
+only ever mean genuinely live runs, not old rows nobody cleaned up. If you see
+that error, `sqlite3 findings.sqlite "select run_id, status, created_at from
+runs where finished_at is null"` shows what the API currently considers active.
 
 ### v1 limitations (by design)
 

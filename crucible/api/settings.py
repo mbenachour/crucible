@@ -54,6 +54,11 @@ class ApiSettings:
     max_concurrent_runs: int = 2
     clone_timeout_s: int = 120
     clone_max_mb: int = 500
+    # A run with no finished_at, no live pid (or no pid at all — the common
+    # case for a plain CLI-started run predating this reaper), and no activity
+    # for this long is assumed abandoned and closed out so it stops
+    # permanently occupying a concurrency slot (dao.reap_dead_runs).
+    stale_run_s: int = 6 * 3600
 
     @classmethod
     def from_env(cls, **overrides) -> ApiSettings:
@@ -76,6 +81,7 @@ class ApiSettings:
             max_concurrent_runs=int(env("CRUCIBLE_API_MAX_CONCURRENT_RUNS", cls.max_concurrent_runs)),
             clone_timeout_s=int(env("CRUCIBLE_API_CLONE_TIMEOUT_S", cls.clone_timeout_s)),
             clone_max_mb=int(env("CRUCIBLE_API_CLONE_MAX_MB", cls.clone_max_mb)),
+            stale_run_s=int(env("CRUCIBLE_API_STALE_RUN_S", cls.stale_run_s)),
         )
         for k, v in overrides.items():
             if v is not None:

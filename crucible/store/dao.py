@@ -177,6 +177,74 @@ class Store:
                 r.finished_at = datetime.now(UTC)
             return len(stuck)
 
+    def reap_dead_runs(self, *, stale_after_s: int) -> int:
+        """Close out a run that is never coming back, so it stops occupying a
+        concurrency slot forever (specs.md gap: `sweep_stuck_launches` only
+        catches a run still mid-*clone*; a `crucible run` process that was
+        killed, crashed, or whose terminal was closed leaves its row at
+        `status='running'` / `finished_at=NULL` indefinitely).
+
+        Two signals, and a row only ever uses one of them:
+
+        1. **Process liveness** — if `pid` is recorded (an API-triggered
+           launch) and that pid is still running, the row is trusted and left
+           alone no matter how old it is (a real audit can legitimately run
+           for hours). If the pid is recorded and gone, the run is dead
+           regardless of age.
+        2. **Staleness** — only for a row with no `pid` at all (a plain
+           CLI-started run — the common case for anything run before this
+           reaper existed, since `crucible run` invoked directly never calls
+           `set_pid`). No way to check liveness, so age is the only signal:
+           older than `stale_after_s` with no `finished_at` is assumed
+           abandoned.
+
+        Returns the number of rows closed out.
+        """
+        import os
+
+        def _pid_alive(pid: int) -> bool:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return False
+            except OSError:
+                return True  # exists but not ours (e.g. PermissionError) — leave it alone
+            return True
+
+        cutoff = datetime.now(UTC) - timedelta(seconds=stale_after_s)
+        with self.session() as s:
+            # Pre-filter in SQL (avoids comparing tz-aware `cutoff` against a
+            # tz-naive value SQLite hands back for `created_at` in Python —
+            # the same reason `sweep_stuck_launches` does its age check here
+            # too): a row with a pid needs a liveness check regardless of age;
+            # a row with none is only a candidate once it's actually stale.
+            candidates = list(s.scalars(
+                select(Run).where(
+                    Run.finished_at.is_(None),
+                    (Run.pid.is_not(None)) | (Run.created_at < cutoff),
+                )
+            ))
+            reaped = 0
+            for r in candidates:
+                if r.pid is not None:
+                    if _pid_alive(r.pid):
+                        continue  # trust liveness — never reap on age alone
+                    dead_pid, stale = True, False
+                else:
+                    dead_pid, stale = False, True  # SQL already confirmed created_at < cutoff
+                if not (dead_pid or stale):
+                    continue
+                r.outcome = "failed" if dead_pid else "stale"
+                r.status = "finished"
+                r.finished_at = datetime.now(UTC)
+                if not r.clone_error:
+                    r.clone_error = (
+                        "process no longer running (reaped)" if dead_pid
+                        else f"no activity for over {stale_after_s}s (reaped as stale)"
+                    )
+                reaped += 1
+            return reaped
+
     def add_finding(self, row: FindingRow) -> None:
         with self.session() as s:
             s.add(row)

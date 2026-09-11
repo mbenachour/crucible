@@ -112,3 +112,33 @@ def test_count_active_runs_and_sweep(tmp_path):
     assert store.get_run("stuck1").outcome == "failed"
     assert store.get_run("fresh1").clone_status == "pending"  # untouched
     assert store.count_active_runs() == 1
+
+
+def test_reap_dead_runs_by_pid_liveness(tmp_path):
+    """The bug this guards against: a plain `crucible run` from before this
+    reaper existed (no pid recorded) sat at status=running forever and
+    permanently ate a concurrency slot."""
+    store = Store(f"sqlite:///{tmp_path}/f.sqlite")
+    store.create_run("cli_old_stale", "/repo", "abc123", "python")  # no pid — the historical case
+    store.create_launch("api_dead", "o/r")
+    store.set_pid("api_dead", 999999)  # not a real pid
+    store.create_launch("api_alive", "o/r2")
+    store.set_pid("api_alive", 1)  # pid 1 (init) — always alive on any real system
+    store.create_launch("api_no_pid_fresh", "o/r3")  # never got past cloning
+
+    from datetime import UTC, datetime, timedelta
+
+    from crucible.store.models import Run
+
+    with store.session() as s:
+        s.get(Run, "cli_old_stale").created_at = datetime.now(UTC) - timedelta(hours=48)
+
+    with patch("os.kill", side_effect=lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()) if pid == 999999 else None):
+        reaped = store.reap_dead_runs(stale_after_s=3600)
+
+    assert reaped == 2
+    assert store.get_run("cli_old_stale").outcome == "stale"
+    assert store.get_run("api_dead").outcome == "failed"
+    assert store.get_run("api_alive").clone_status == "pending"  # untouched — pid 1 is alive
+    assert store.get_run("api_no_pid_fresh").clone_status == "pending"  # untouched — not stale yet
+    assert store.count_active_runs() == 2

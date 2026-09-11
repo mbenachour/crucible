@@ -122,6 +122,26 @@ def test_trigger_sweeps_stuck_launches_before_counting(trigger_client, store):
     assert store.get_run("stuck").clone_status == "clone_failed"
 
 
+def test_trigger_reaps_a_stale_plain_cli_run_before_counting(trigger_client, store):
+    """The bug this guards against: a plain `crucible run` (no pid recorded —
+    the historical case, and still true for anything not launched via the
+    API) sitting at status=running forever permanently ate a concurrency slot."""
+    from datetime import UTC, datetime, timedelta
+
+    from crucible.store.models import Run
+
+    store.create_run("old_cli_run", "/repo", "abc123", "python")
+    with store.session() as s:
+        s.get(Run, "old_cli_run").created_at = datetime.now(UTC) - timedelta(hours=48)
+
+    with patch("crucible.api.routers.trigger.launch_run", return_value="fresh") as launch:
+        r = trigger_client.post("/runs", json={"repo": "octocat/Hello-World"})
+    assert r.status_code == 202
+    launch.assert_called_once()
+    assert store.get_run("old_cli_run").outcome == "stale"
+    assert store.get_run("old_cli_run").finished_at is not None
+
+
 def test_get_run_exposes_launch_fields(trigger_client, store):
     store.create_launch("launching1", "octocat/Hello-World")
     r = trigger_client.get("/runs/launching1")
