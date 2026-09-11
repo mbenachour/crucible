@@ -167,6 +167,7 @@ def client(store, workspace, tmp_path):
         store_url=str(store.engine.url),
         checkpoint_db=str(tmp_path / "checkpoints.sqlite"),
         workspace_root=str(tmp_path / "ws_a"),
+        serve_ui=False,  # API contract tests are independent of whether ui/ is built
     )
     app = create_app(settings)
     app.state.store = store  # reuse the seeded store instance

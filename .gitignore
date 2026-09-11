@@ -24,6 +24,10 @@ findings.sqlite*
 build/
 dist/
 
+# UI (ui/ has its own .gitignore too)
+node_modules/
+ui/dist/
+
 # tests/ was untracked (issue #30). The Recon re-engineering (issue #34) needs
 # its acceptance suite committed, so the test *modules* and the hermetic
 # generated fixtures under tests/ are tracked again. Local scratch fixtures and
