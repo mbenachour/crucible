@@ -97,6 +97,27 @@ Interactive reference: **`/docs`** (Swagger UI), raw schema **`/openapi.json`**
 | `GET /runs/{run_id}/dedup/clusters` | `dedup/clusters.json` |
 | `GET /runs/{run_id}/coverage-notes/{area}` | `coverage/<area>.md` (`text/plain`) |
 | `GET /runs/{run_id}/log` | `run.log`; `?tail=N` for the last N lines |
+| `GET /runs/{run_id}/log/stream` | live tail — a growing chunked `text/plain` body, `?tail_lines=N` (default 200) of history first. See below. |
+
+#### Live log tailing
+
+```bash
+curl -sN "$API/runs/$RUN/log/stream?tail_lines=50"
+```
+
+Sends the last `tail_lines` immediately, then keeps the connection open and
+streams new lines as `run.log` grows — real-time visibility into a run in
+progress. Deliberately **plain chunked HTTP, not Server-Sent Events or a
+WebSocket**: it works with the same `Authorization: Bearer` header as every
+other endpoint (`EventSource` can't set custom headers; a WebSocket would need
+its own auth scheme), and needs no client library — `fetch()` + a
+`ReadableStream` reader is enough, which is exactly what the dashboard's
+**Logs** tab does.
+
+Ends on its own once the run has finished and a couple of polls pass with
+nothing new (or after a few hours regardless, as a backstop) — a still-watching
+client just reconnects. No new auth or env config; it's a `GET` like the rest
+of this section.
 
 ### Execution state
 

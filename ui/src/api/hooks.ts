@@ -34,8 +34,12 @@ export const useRun = (runId: string) =>
   useQuery({
     queryKey: ["run", runId],
     queryFn: () => apiFetch<Run>(`/runs/${runId}`),
-    // poll while a triggered run is still being cloned; stop once cloned/failed
-    refetchInterval: (q) => (LAUNCHING.has(q.state.data?.clone_status ?? "") ? 2000 : false),
+    // poll while cloning, and for as long as the run hasn't finished — so the
+    // "run in progress" banner (and its live-logs link) clears itself promptly
+    refetchInterval: (q) =>
+      LAUNCHING.has(q.state.data?.clone_status ?? "") || (q.state.data && !q.state.data.finished_at)
+        ? 2000
+        : false,
   });
 
 export function useTriggerRun() {

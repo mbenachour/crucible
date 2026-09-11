@@ -11,6 +11,7 @@ import { Report } from "./pages/Report";
 import { Recon } from "./pages/Recon";
 import { Coverage } from "./pages/Coverage";
 import { RunStatePage } from "./pages/RunStatePage";
+import { RunLogs } from "./pages/RunLogs";
 import { Wishlist } from "./pages/Wishlist";
 import { Artifacts } from "./pages/Artifacts";
 
@@ -56,6 +57,7 @@ const router = createBrowserRouter([
           { path: "recon", element: <Recon /> },
           { path: "coverage", element: <Coverage /> },
           { path: "state", element: <RunStatePage /> },
+          { path: "logs", element: <RunLogs /> },
           { path: "artifacts", element: <Artifacts /> },
           { path: "wishes", element: <Wishlist /> },
         ],

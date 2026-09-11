@@ -1,17 +1,19 @@
-"""GET /runs/{id}/artifacts[...], /architecture, /recon/*, /dedup/clusters, /log (issue #42)."""
+"""GET /runs/{id}/artifacts[...], /architecture, /recon/*, /dedup/clusters, /log[/stream] (issue #42)."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Query
-from fastapi.responses import PlainTextResponse, Response
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import PlainTextResponse, Response, StreamingResponse
 
 from crucible.api.artifacts import artifact_index, content_type_for, resolve_artifact
-from crucible.api.deps import get_workspace, require_read
+from crucible.api.deps import get_store, get_workspace, require_read
 from crucible.api.errors import ApiError
+from crucible.api.log_tail import tail_file
 from crucible.api.schemas import ArtifactMetaOut
+from crucible.store.dao import Store
 
 router = APIRouter(prefix="/runs/{run_id}", tags=["artifacts"], dependencies=[Depends(require_read)])
 
@@ -82,3 +84,37 @@ def get_log(
     if tail:
         return "\n".join(text.splitlines()[-tail:]) + "\n"
     return text
+
+
+@router.get("/log/stream")
+async def stream_log(
+    run_id: str,
+    request: Request,
+    ws: Path = Depends(get_workspace),
+    store: Store = Depends(get_store),
+    tail_lines: int = Query(200, ge=0, le=5000, description="lines of history to send before following"),
+) -> StreamingResponse:
+    """Tail `run.log` live — a growing chunked `text/plain` body, one log line
+    per line. Not Server-Sent Events / WebSocket on purpose: a plain streamed
+    response works with the same `Authorization` header as every other
+    endpoint (`EventSource` can't set custom headers; a WebSocket would need
+    its own auth scheme), and needs no new dependency on either side —
+    `fetch()` + a `ReadableStream` reader is enough client-side.
+
+    Ends on its own once the run has `finished_at` set and a couple of grace
+    polls pass with nothing new to send, or after a few hours regardless — a
+    client still watching just reconnects. Also ends the moment the client
+    disconnects. The actual tailing logic (`log_tail.tail_file`) has no
+    FastAPI dependency and is unit-tested directly with asyncio.
+    """
+    path = resolve_artifact(ws, "run.log")  # 404s here if it doesn't exist yet
+
+    def _is_finished() -> bool:
+        run = store.get_run(run_id)
+        return bool(run and run.finished_at)
+
+    return StreamingResponse(
+        tail_file(path, tail_lines=tail_lines, is_finished=_is_finished, is_disconnected=request.is_disconnected),
+        media_type="text/plain; charset=utf-8",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
