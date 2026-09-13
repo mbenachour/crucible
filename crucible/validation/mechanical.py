@@ -107,6 +107,16 @@ def _check_patch_applies(finding, repo_path: str, repo_commit: str) -> list[str]
     return []
 
 
+def emit_repair_reasons(finding, repo_path: str) -> list[str]:
+    """Structural reasons worth giving a Hunter one repair attempt on, during
+    Hunt's own emit step rather than only after the fact in Pass A. A bad
+    line range or a diff whose hunk header miscounts context/added lines are
+    mistakes the model can plausibly fix given the exact `git apply` error —
+    unlike a tautological finding or a genuinely unreachable defect, which
+    belong to `_check_schema` / the bug validator and are left alone here."""
+    return _check_path_and_range(finding, repo_path) + _check_patch_applies(finding, repo_path, "")
+
+
 def _check_poc_parses(finding) -> list[str]:
     # TODO(phase1): language-aware parse (py: ast.parse; c: compile-only).
     if not finding.poc_test.strip():
