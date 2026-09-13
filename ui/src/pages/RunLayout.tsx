@@ -1,4 +1,4 @@
-import { NavLink, Outlet, useParams } from "react-router-dom";
+import { Link, NavLink, Outlet, useParams } from "react-router-dom";
 import { useRun } from "../api/hooks";
 import { Q } from "../components/states";
 import { OutcomeTag, Time } from "../components/bits";
@@ -13,6 +13,7 @@ const TABS = [
   { to: "recon", label: "Recon" },
   { to: "coverage", label: "Coverage" },
   { to: "state", label: "State" },
+  { to: "logs", label: "Logs" },
   { to: "artifacts", label: "Artifacts" },
   { to: "wishes", label: "Wishes" },
 ];
@@ -74,13 +75,15 @@ function LaunchBanner({ run }: { run: Run }) {
     case "pending":
       return (
         <div className="banner warn">
-          <span className="dim">⟳</span> Queued — waiting to clone <code className="mono">{run.source_spec}</code>…
+          <span className="dim">⟳</span> Queued — waiting to clone <code className="mono">{run.source_spec}</code>…{" "}
+          <Link to={`/runs/${run.run_id}/logs`}>watch live logs</Link>
         </div>
       );
     case "cloning":
       return (
         <div className="banner warn">
-          <span className="dim">⟳</span> Cloning <code className="mono">{run.source_spec}</code>…
+          <span className="dim">⟳</span> Cloning <code className="mono">{run.source_spec}</code>…{" "}
+          <Link to={`/runs/${run.run_id}/logs`}>watch live logs</Link>
         </div>
       );
     case "clone_failed":
@@ -98,6 +101,14 @@ function LaunchBanner({ run }: { run: Run }) {
         </div>
       );
     default:
+      if (!run.finished_at) {
+        return (
+          <div className="banner warn">
+            <span className="dim">⟳</span> Run in progress —{" "}
+            <Link to={`/runs/${run.run_id}/logs`}>watch live logs</Link>
+          </div>
+        );
+      }
       return null;
   }
 }

@@ -711,6 +711,7 @@ the three run-output sources behind one HTTP surface:
 | `schemas.py` | Pydantic response models; finding payload reuses `validation/schema.py` |
 | `deps.py` | `get_store` / `get_workspace(run_id)` / `require_read` / `require_write` |
 | `artifacts.py` | `artifact_index`, `resolve_artifact`, `content_type_for` — **no web dependency** |
+| `log_tail.py` | `tail_file` — live log tailing as a chunked HTTP response (`GET /log/stream`), **no web dependency**; pure asyncio so it's unit-tested directly rather than through an HTTP client's streaming quirks |
 | `launcher.py` | `launch_run` — pre-registers a `Run` row, then clones + spawns `crucible run` on a background thread (milestone: Trigger) |
 | `routers/` | `health`, `runs` (+report/metrics/coverage), `findings` (+validations, cross-run `stable_key`), `artifacts` (+recon/dedup/log shortcuts), `state`, `wishlist`, `trigger` (`POST /runs`) |
 

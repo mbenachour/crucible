@@ -1874,6 +1874,61 @@
         ]
       }
     },
+    "/runs/{run_id}/log/stream": {
+      "get": {
+        "description": "Tail `run.log` live \u2014 a growing chunked `text/plain` body, one log line\nper line. Not Server-Sent Events / WebSocket on purpose: a plain streamed\nresponse works with the same `Authorization` header as every other\nendpoint (`EventSource` can't set custom headers; a WebSocket would need\nits own auth scheme), and needs no new dependency on either side \u2014\n`fetch()` + a `ReadableStream` reader is enough client-side.\n\nEnds on its own once the run has `finished_at` set and a couple of grace\npolls pass with nothing new to send, or after a few hours regardless \u2014 a\nclient still watching just reconnects. Also ends the moment the client\ndisconnects. The actual tailing logic (`log_tail.tail_file`) has no\nFastAPI dependency and is unit-tested directly with asyncio.",
+        "operationId": "stream_log_runs__run_id__log_stream_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "lines of history to send before following",
+            "in": "query",
+            "name": "tail_lines",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "description": "lines of history to send before following",
+              "maximum": 5000,
+              "minimum": 0,
+              "title": "Tail Lines",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stream Log",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
     "/runs/{run_id}/metrics": {
       "get": {
         "operationId": "get_metrics_runs__run_id__metrics_get",
