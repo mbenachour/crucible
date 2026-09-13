@@ -210,7 +210,7 @@ def _hunt_one(
             tools=tools, allowed=allowed, system_prompt=system_prompt, task_text=task_text,
         )
         model = registry.chat_model(ModelRole.HUNTER)
-        result = _emit(model, system_prompt, task_text, _digest(msgs))
+        result = _emit(model, system_prompt, task_text, _digest(msgs), repo=repo)
     finally:
         _destroy_sandbox(sandbox)
 
@@ -289,7 +289,7 @@ def _explore(
     return messages, n
 
 
-def _emit(model, system_prompt: str, task_text: str, digest: str) -> HuntResult | None:
+def _emit(model, system_prompt: str, task_text: str, digest: str, *, repo: str | None = None) -> HuntResult | None:
     """Phase B — one forced structured emission from the gathered context.
 
     Each attempt is a **fresh** two-message request (system + human, no
@@ -297,8 +297,18 @@ def _emit(model, system_prompt: str, task_text: str, digest: str) -> HuntResult 
     set of `ToolMessage`s — a strict OpenAI-compatible backend (DeepSeek) 400s
     with "insufficient tool messages following tool_calls message" on the next
     call. The repair signal rides in a new `HumanMessage` instead.
+
+    A parsed `HuntResult` with a finding also gets one structural self-check
+    here — bad line range or a `proposed_patch` that fails `git apply
+    --check` — before it ever reaches Pass A. Hunters (small models
+    especially) hand-write unified-diff hunk headers and reliably miscount
+    context/added lines; giving them the exact `git apply` error and one more
+    turn fixes most of these, instead of losing the whole finding to
+    `mechanical_failed` after the fact with no chance to repair it.
     """
     from langchain_core.messages import HumanMessage, SystemMessage
+
+    from crucible.validation.mechanical import emit_repair_reasons
 
     name = HuntResult.__name__
     base_ask = (
@@ -312,14 +322,16 @@ def _emit(model, system_prompt: str, task_text: str, digest: str) -> HuntResult 
     bound = model.bind_tools([HuntResult], tool_choice=name)
     err = "model did not call the emit tool"
     ask = base_ask
-    for attempt in range(2):
+    last_parsed: HuntResult | None = None
+    n_attempts = 3 if repo else 2
+    for attempt in range(n_attempts):
         try:
             out = bound.invoke([
                 SystemMessage(content=system_prompt), HumanMessage(content=ask),
             ])
         except Exception as e:  # noqa: BLE001 — provider 400 etc; retry once, then give up
             err = f"{type(e).__name__}: {str(e).splitlines()[0]}"
-            if attempt == 0:
+            if attempt < n_attempts - 1:
                 continue
             break
         calls = getattr(out, "tool_calls", None) or []
@@ -329,7 +341,7 @@ def _emit(model, system_prompt: str, task_text: str, digest: str) -> HuntResult 
             ask = f"{base_ask}\n\nYou did not call `{name}`. Call it now, exactly once."
             continue
         try:
-            return HuntResult.model_validate(call["args"])
+            parsed = HuntResult.model_validate(call["args"])
         except ValidationError as e:
             err = str(e).splitlines()[0]
             ask = (
@@ -337,8 +349,28 @@ def _emit(model, system_prompt: str, task_text: str, digest: str) -> HuntResult 
                 f"validation: {err}\nReturn a corrected call — same evidence, "
                 f"fixed fields."
             )
+            continue
+        last_parsed = parsed
+        if not (repo and parsed.finding_found and parsed.finding is not None):
+            return parsed
+        reasons = emit_repair_reasons(parsed.finding, repo)
+        if not reasons:
+            return parsed
+        err = "; ".join(reasons)
+        if attempt == n_attempts - 1:
+            log.warning("hunt emit: patch/path still broken after repair attempt: %s", err)
+            return parsed  # let Pass A record it as mechanical_failed as before
+        ask = (
+            f"{base_ask}\n\nYour previous `{name}` call's `finding` failed a "
+            f"structural check: {err}\nReturn a corrected call — same "
+            f"evidence and threat model, but a `file_path`/`line_start`/"
+            f"`line_end` that exist in the repo and a `proposed_patch` whose "
+            f"unified-diff hunk header (`@@ -old_start,old_count "
+            f"+new_start,new_count @@`) matches the actual number of context "
+            f"and changed lines that follow it."
+        )
     log.warning("hunt emit failed: %s", err)
-    return None
+    return last_parsed
 
 
 def _digest(messages: list, *, budget: int = 16_000) -> str:
