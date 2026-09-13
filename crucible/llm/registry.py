@@ -234,31 +234,68 @@ class ModelRegistry:
         - ``CRUCIBLE_DEEPSEEK_BASE_URL``    applies to every deepseek role
         - ``OPENROUTER_BASE_URL``          applies to every openrouter role
         """
+        out, _origins = cls._resolve_env(defaults, None)
+        return cls(out)
+
+    @classmethod
+    def from_env_with_origins(
+        cls,
+        defaults: dict[ModelRole, ModelEndpoint] | None = None,
+        base_origins: dict[ModelRole, dict[str, str]] | None = None,
+    ) -> tuple[ModelRegistry, dict[ModelRole, dict[str, str]]]:
+        """Like `from_env`, but also returns per-field provenance (issue #73):
+        for each role, a dict mapping ``provider``/``model``/``temperature``/
+        ``base_url`` to the origin that last set it — ``"env:<VARNAME>"`` if an
+        env var won here, else whatever `base_origins` already said (e.g. a
+        config file name, or ``"default"``)."""
+        out, origins = cls._resolve_env(defaults, base_origins)
+        return cls(out), origins
+
+    @classmethod
+    def _resolve_env(
+        cls,
+        defaults: dict[ModelRole, ModelEndpoint] | None,
+        base_origins: dict[ModelRole, dict[str, str]] | None,
+    ) -> tuple[dict[ModelRole, ModelEndpoint], dict[ModelRole, dict[str, str]]]:
+        """Shared resolution loop behind `from_env` / `from_env_with_origins`."""
         from crucible.config import DEFAULT_ENDPOINTS  # local import: avoid cycle
 
         base = dict(defaults or DEFAULT_ENDPOINTS)
+        origins: dict[ModelRole, dict[str, str]] = {
+            role: dict((base_origins or {}).get(role, {})) for role in base
+        }
         ollama_base = os.environ.get("CRUCIBLE_OLLAMA_BASE_URL")
         deepseek_base = os.environ.get("CRUCIBLE_DEEPSEEK_BASE_URL")
         openrouter_base = os.environ.get("OPENROUTER_BASE_URL")
         out: dict[ModelRole, ModelEndpoint] = {}
         for role, ep in base.items():
             r = role.value.upper()
+            o = origins.setdefault(role, {})
             # `<ROLE>_LLM` (e.g. RECON_LLM=deepseek) is the friendly alias;
             # `CRUCIBLE_PROVIDER_<ROLE>` wins if both are set.
-            provider = Provider.parse(
-                os.environ.get(f"CRUCIBLE_PROVIDER_{r}")
-                or os.environ.get(f"{r}_LLM")
-                or ep.provider.value
-            )
+            provider_env_name = f"CRUCIBLE_PROVIDER_{r}"
+            role_llm_env_name = f"{r}_LLM"
+            provider_env = os.environ.get(provider_env_name)
+            role_llm_env = os.environ.get(role_llm_env_name)
+            provider = Provider.parse(provider_env or role_llm_env or ep.provider.value)
+            if provider_env:
+                o["provider"] = f"env:{provider_env_name}"
+            elif role_llm_env:
+                o["provider"] = f"env:{role_llm_env_name}"
             # model resolution:
             #   CRUCIBLE_MODEL_<ROLE>  (per-role, explicit)   — highest
             #   <PROVIDER>_MODEL env / built-in default        — when provider was
             #     switched away from the config's, or set explicitly
             #   ep.model                                       — keep config value
-            explicit_model = os.environ.get(f"CRUCIBLE_MODEL_{r}")
-            provider_model_env = os.environ.get(_PROVIDER_MODEL_ENV.get(provider, ""))
+            explicit_model_env_name = f"CRUCIBLE_MODEL_{r}"
+            explicit_model = os.environ.get(explicit_model_env_name)
+            provider_model_env_name = _PROVIDER_MODEL_ENV.get(provider, "")
+            provider_model_env = (
+                os.environ.get(provider_model_env_name) if provider_model_env_name else None
+            )
             if explicit_model:
                 model = explicit_model
+                o["model"] = f"env:{explicit_model_env_name}"
             elif provider is Provider.OPENROUTER and provider is not ep.provider:
                 # Switched to OpenRouter without naming a model: an inherited
                 # ollama tag would silently become a bogus OpenRouter id.
@@ -270,19 +307,36 @@ class ModelRegistry:
                     f"[models.{role.value}] table in crucible.toml)."
                 )
             elif provider is not ep.provider:
-                model = provider_model_env or _PROVIDER_DEFAULT_MODEL.get(provider, ep.model)
+                if provider_model_env:
+                    model = provider_model_env
+                    o["model"] = f"env:{provider_model_env_name}"
+                else:
+                    model = _PROVIDER_DEFAULT_MODEL.get(provider, ep.model)
+                    if provider in _PROVIDER_DEFAULT_MODEL:
+                        o["model"] = "default"
+                    # else: falls back to ep.model unchanged — keep prior origin
             elif provider_model_env:
                 model = provider_model_env
+                o["model"] = f"env:{provider_model_env_name}"
             else:
-                model = ep.model
-            temp = os.environ.get(f"CRUCIBLE_TEMPERATURE_{r}")
+                model = ep.model  # unchanged — keep prior origin
+            temp_env_name = f"CRUCIBLE_TEMPERATURE_{r}"
+            temp = os.environ.get(temp_env_name)
+            if temp is not None:
+                o["temperature"] = f"env:{temp_env_name}"
             base_url = ep.base_url
+            base_url_env_name = None
             if provider is Provider.OLLAMA and ollama_base:
                 base_url = ollama_base
+                base_url_env_name = "CRUCIBLE_OLLAMA_BASE_URL"
             elif provider is Provider.DEEPSEEK and deepseek_base:
                 base_url = deepseek_base
+                base_url_env_name = "CRUCIBLE_DEEPSEEK_BASE_URL"
             elif provider is Provider.OPENROUTER and openrouter_base:
                 base_url = openrouter_base
+                base_url_env_name = "OPENROUTER_BASE_URL"
+            if base_url_env_name:
+                o["base_url"] = f"env:{base_url_env_name}"
             out[role] = ModelEndpoint(
                 role=role,
                 model=model,
@@ -296,4 +350,4 @@ class ModelRegistry:
                 seed=ep.seed,
                 extra=ep.extra,
             )
-        return cls(out)
+        return out, origins

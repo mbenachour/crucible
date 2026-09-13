@@ -29,6 +29,22 @@
         "title": "ArtifactMetaOut",
         "type": "object"
       },
+      "ConfigModelsOut": {
+        "properties": {
+          "roles": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ModelEndpointOut"
+            },
+            "title": "Roles",
+            "type": "object"
+          }
+        },
+        "required": [
+          "roles"
+        ],
+        "title": "ConfigModelsOut",
+        "type": "object"
+      },
       "CoverageCellOut": {
         "properties": {
           "area": {
@@ -406,6 +422,68 @@
           "tool_usage"
         ],
         "title": "MetricsOut",
+        "type": "object"
+      },
+      "ModelEndpointOut": {
+        "description": "A role's *effective* model binding. Never carries `api_key` \u2014 see issue #73.",
+        "properties": {
+          "base_url": {
+            "title": "Base Url",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ModelSourceOut"
+          },
+          "temperature": {
+            "title": "Temperature",
+            "type": "number"
+          }
+        },
+        "required": [
+          "provider",
+          "model",
+          "temperature",
+          "base_url",
+          "source"
+        ],
+        "title": "ModelEndpointOut",
+        "type": "object"
+      },
+      "ModelSourceOut": {
+        "description": "Per-field provenance: ``\"default\"``, a config file name, or ``\"env:VAR\"``.",
+        "properties": {
+          "base_url": {
+            "title": "Base Url",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "temperature": {
+            "title": "Temperature",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "model",
+          "temperature",
+          "base_url"
+        ],
+        "title": "ModelSourceOut",
         "type": "object"
       },
       "Page_FindingOut_": {
@@ -947,6 +1025,27 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/config/models": {
+      "get": {
+        "operationId": "get_config_models_config_models_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigModelsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Config Models",
+        "tags": [
+          "config"
+        ]
+      }
+    },
     "/findings": {
       "get": {
         "operationId": "find_by_stable_key_findings_get",
