@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "./client";
 import type {
+  ConfigModels,
   Coverage,
   Finding,
   Health,
@@ -21,6 +22,13 @@ const LAUNCHING = new Set(["pending", "cloning"]);
 
 export const useHealth = () =>
   useQuery({ queryKey: ["health"], queryFn: () => apiFetch<Health>("/health"), retry: false });
+
+export const useConfigModels = () =>
+  useQuery({
+    queryKey: ["config-models"],
+    queryFn: () => apiFetch<ConfigModels>("/config/models"),
+    retry: false,
+  });
 
 export const useRuns = (query: Q) =>
   useQuery({
