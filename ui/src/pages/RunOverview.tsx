@@ -1,11 +1,57 @@
 import { Link, useParams } from "react-router-dom";
-import { useMetrics, useRun } from "../api/hooks";
+import { useConfigModels, useMetrics, useRun } from "../api/hooks";
 
 function Tile({ k, v }: { k: string; v: React.ReactNode }) {
   return (
     <div className="tile">
       <div className="k">{k}</div>
       <div className="v">{v}</div>
+    </div>
+  );
+}
+
+const ROLE_LABELS: Record<string, string> = {
+  recon: "Recon", hunter: "Hunter", validator_bug: "Validator (bug)", validator_reach: "Validator (reach)",
+};
+const FIELDS = ["provider", "model", "temperature", "base_url"] as const;
+
+/** Compact per-role effective config + provenance (issue #77) — a field
+ * sourced from this run's own override is tagged distinctly from one that
+ * just reflects the host's config.yaml/env/default. */
+function ModelsPanel({ runId }: { runId: string }) {
+  const cfg = useConfigModels(runId);
+  if (!cfg.data) return null;
+  return (
+    <div>
+      <h3>Models</h3>
+      <div className="tbl-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>role</th>
+              <th>provider</th>
+              <th>model</th>
+              <th>temp</th>
+              <th>base url</th>
+            </tr>
+          </thead>
+          <tbody>
+            {Object.entries(cfg.data.roles).map(([role, e]) => (
+              <tr key={role}>
+                <td>{ROLE_LABELS[role] ?? role}</td>
+                {FIELDS.map((f) => (
+                  <td key={f} className="mono" title={`source: ${e.source[f]}`}>
+                    {String(e[f])}
+                    {e.source[f] === "run override" && (
+                      <span className="tag tag-ok" style={{ marginLeft: 6, fontSize: 10 }}>override</span>
+                    )}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -68,6 +114,8 @@ export function RunOverview() {
           <div className="dim">No tool-usage rows.</div>
         )}
       </div>
+
+      <ModelsPanel runId={runId} />
 
       <div className="dim">
         Jump to{" "}

@@ -75,6 +75,14 @@ _PROVIDER_DEFAULT_BASE_URL = {
 }
 
 
+def default_model_for(provider: Provider) -> str | None:
+    """The built-in default model for a provider that has one (currently only
+    DeepSeek) — `None` for a provider with no safe default (OpenRouter requires
+    an explicit model; see `ModelRegistry._resolve_env`). Used when a per-run
+    override (issue #77) switches a role's provider without naming a model."""
+    return _PROVIDER_DEFAULT_MODEL.get(provider)
+
+
 @dataclass(frozen=True)
 class ModelEndpoint:
     """A role's model binding. `model` is the provider-native model name

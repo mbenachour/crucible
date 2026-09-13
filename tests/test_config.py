@@ -4,7 +4,13 @@ import textwrap
 
 import pytest
 
-from crucible.config import apply_file_tracing_env, load_registry, load_registry_with_provenance
+from crucible.config import (
+    ModelOverrideError,
+    apply_file_tracing_env,
+    apply_model_override,
+    load_registry,
+    load_registry_with_provenance,
+)
 from crucible.llm.registry import ModelRole, Provider
 
 _MATRIX_YAML = textwrap.dedent(
@@ -194,3 +200,98 @@ def test_provenance_full_precedence_chain_default_toml_yaml_env(tmp_path, monkey
     assert e.model == "deepseek-v4-flash" and o["model"] == "env:CRUCIBLE_MODEL_RECON"
     assert e.temperature == pytest.approx(0.6) and o["temperature"] == "config.yaml"
     assert o["base_url"] == "default"
+
+
+# --- per-run model overrides (issue #77) ------------------------------------
+
+def test_run_override_layers_above_env_with_run_override_provenance(tmp_path, monkeypatch):
+    _clear_model_env(monkeypatch)
+    monkeypatch.setenv("CRUCIBLE_MODEL_HUNTER", "deepseek-chat")
+    reg, origins = load_registry_with_provenance(
+        "/nonexistent/config.yaml",
+        run_override={"hunter": {"temperature": 0.9}},
+    )
+    hunter = reg.endpoint(ModelRole.HUNTER)
+    assert hunter.model == "deepseek-chat"  # env value untouched — override didn't set model
+    assert hunter.temperature == pytest.approx(0.9)
+    assert origins[ModelRole.HUNTER]["model"] == "env:CRUCIBLE_MODEL_HUNTER"
+    assert origins[ModelRole.HUNTER]["temperature"] == "run override"
+
+
+def test_run_override_with_no_fields_touched_is_a_noop():
+    reg, origins = load_registry_with_provenance("/nonexistent/config.yaml", run_override=None)
+    assert origins[ModelRole.RECON]["model"] == "default"
+    reg2, origins2 = load_registry_with_provenance("/nonexistent/config.yaml", run_override={})
+    assert reg2.endpoint(ModelRole.RECON).model == reg.endpoint(ModelRole.RECON).model
+    assert origins2 == origins
+
+
+def test_apply_model_override_unknown_role_rejected():
+    _, origins = load_registry_with_provenance("/nonexistent/config.yaml")
+    with pytest.raises(ModelOverrideError, match="unknown model role"):
+        apply_model_override(
+            {r: None for r in ModelRole}, origins, {"not_a_role": {"model": "x"}},
+        )
+
+
+def test_apply_model_override_openrouter_switch_without_model_is_unresolvable():
+    reg, origins = load_registry_with_provenance("/nonexistent/config.yaml")
+    endpoints = {r: reg.endpoint(r) for r in ModelRole}
+    with pytest.raises(ModelOverrideError, match="openrouter"):
+        apply_model_override(endpoints, origins, {"recon": {"provider": "openrouter"}})
+
+
+def test_apply_model_override_bad_provider_name_is_unresolvable():
+    reg, origins = load_registry_with_provenance("/nonexistent/config.yaml")
+    endpoints = {r: reg.endpoint(r) for r in ModelRole}
+    with pytest.raises(ModelOverrideError, match="unknown LLM provider"):
+        apply_model_override(endpoints, origins, {"recon": {"provider": "not-a-provider"}})
+
+
+def test_apply_model_override_deepseek_switch_falls_back_to_default_model():
+    reg, origins = load_registry_with_provenance("/nonexistent/config.yaml")
+    endpoints = {r: reg.endpoint(r) for r in ModelRole}
+    out, out_origins = apply_model_override(endpoints, origins, {"recon": {"provider": "deepseek"}})
+    assert out[ModelRole.RECON].model == "deepseek-v4-flash"
+    assert out_origins[ModelRole.RECON]["provider"] == "run override"
+    assert out_origins[ModelRole.RECON]["model"] == "default"  # not explicitly set by the override
+
+
+def test_apply_model_override_rejects_hunter_eq_validator_via_override_on_validator():
+    """Host hunter (deepseek-v4-flash) and host validator_bug (llama3.1:8b)
+    differ by default; overriding validator_bug to match hunter must 422."""
+    reg, origins = load_registry_with_provenance("/nonexistent/config.yaml")
+    endpoints = {r: reg.endpoint(r) for r in ModelRole}
+    with pytest.raises(ModelOverrideError, match="different models"):
+        apply_model_override(
+            endpoints, origins,
+            {"validator_bug": {"provider": "deepseek", "model": "deepseek-v4-flash"}},
+        )
+
+
+def test_apply_model_override_rejects_hunter_eq_validator_via_override_on_hunter():
+    reg, origins = load_registry_with_provenance("/nonexistent/config.yaml")
+    endpoints = {r: reg.endpoint(r) for r in ModelRole}
+    with pytest.raises(ModelOverrideError, match="different models"):
+        apply_model_override(
+            endpoints, origins,
+            {"hunter": {"provider": "ollama", "model": "llama3.1:8b"}},
+        )
+
+
+def test_apply_model_override_accepts_a_valid_override_on_both_roles():
+    reg, origins = load_registry_with_provenance("/nonexistent/config.yaml")
+    endpoints = {r: reg.endpoint(r) for r in ModelRole}
+    out, out_origins = apply_model_override(
+        endpoints, origins,
+        {
+            "hunter": {"provider": "deepseek", "model": "deepseek-chat"},
+            "validator_bug": {"provider": "deepseek", "model": "deepseek-reasoner"},
+        },
+    )
+    assert out[ModelRole.HUNTER].model == "deepseek-chat"
+    assert out[ModelRole.VALIDATOR_BUG].model == "deepseek-reasoner"
+    assert out_origins[ModelRole.HUNTER]["model"] == "run override"
+    # untouched role/fields are unaffected
+    assert out[ModelRole.RECON].model == endpoints[ModelRole.RECON].model
+    assert out_origins[ModelRole.RECON]["model"] == "default"

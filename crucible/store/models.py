@@ -46,6 +46,11 @@ class Run(Base):
     clone_error: Mapped[str] = mapped_column(String, default="")
     pid: Mapped[int | None] = mapped_column(Integer, nullable=True)  # the spawned `crucible run` process
 
+    # Per-run model override (issue #77): role -> partial endpoint
+    # ({"provider"?, "model"?, "temperature"?, "base_url"?}), validated at
+    # POST /runs time. `None`/empty for a run using the host's config as-is.
+    model_override: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
     findings: Mapped[list["FindingRow"]] = relationship(back_populates="run")
 
 

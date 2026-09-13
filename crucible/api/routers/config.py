@@ -4,20 +4,35 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from crucible.api.deps import require_read
+from crucible.api.deps import get_store, require_read
+from crucible.api.errors import ApiError
 from crucible.api.schemas import ConfigModelsOut, ModelEndpointOut, ModelSourceOut
-from crucible.config import load_registry_with_provenance
+from crucible.config import apply_model_override, load_registry_with_provenance
 from crucible.llm.registry import ModelRole
+from crucible.store.dao import Store
 
 router = APIRouter(tags=["config"], dependencies=[Depends(require_read)])
 
 
 @router.get("/config/models", response_model=ConfigModelsOut)
-def get_config_models() -> ConfigModelsOut:
+def get_config_models(
+    run_id: str | None = None,
+    store: Store = Depends(get_store),
+) -> ConfigModelsOut:
     registry, origins = load_registry_with_provenance()
+    endpoints = {role: registry.endpoint(role) for role in ModelRole}
+    if run_id is not None:
+        run = store.get_run(run_id)
+        if run is None:
+            raise ApiError(404, "run not found", run_id)
+        if run.model_override:
+            # Already validated at POST /runs time — a fresh 422 here would
+            # only mean the host config itself changed since (rare); reported
+            # via the normal 500 path rather than special-cased.
+            endpoints, origins = apply_model_override(endpoints, origins, run.model_override)
     roles: dict[str, ModelEndpointOut] = {}
     for role in ModelRole:
-        e = registry.endpoint(role)
+        e = endpoints[role]
         o = origins.get(role, {})
         # `ModelEndpointOut` has no `api_key` field — the secret never enters the
         # response even in memory, let alone the env vars it can fall back to.

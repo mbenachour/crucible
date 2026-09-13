@@ -45,16 +45,48 @@ export interface Run {
   source_spec: string;
   clone_status: CloneStatus;
   clone_error: string;
+  // Per-run model override (issue #77) — {} for a run using the host config as-is.
+  model_override: Record<string, ModelOverride>;
+}
+
+// Role -> partial endpoint. Only these four fields are ever accepted —
+// there is no `api_key` field (issue #73's absolute no-secrets rule).
+export interface ModelOverride {
+  provider?: string;
+  model?: string;
+  temperature?: number;
+  base_url?: string;
 }
 
 export interface TriggerRunIn {
   repo: string;
   ref?: string;
+  models?: Record<string, ModelOverride>;
 }
 
 export interface TriggerRunOut {
   run_id: string;
   clone_status: CloneStatus;
+}
+
+// GET /config/models (issue #73), ?run_id= (issue #77).
+export interface ModelSource {
+  provider: string;
+  model: string;
+  temperature: string;
+  base_url: string;
+}
+
+export interface ModelEndpointInfo {
+  provider: string;
+  model: string;
+  temperature: number;
+  base_url: string;
+  source: ModelSource;
+}
+
+export interface ConfigModels {
+  roles: Record<string, ModelEndpointInfo>;
 }
 
 export interface Metrics {

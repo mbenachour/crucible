@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "./client";
 import type {
+  ConfigModels,
   Coverage,
   Finding,
   Health,
@@ -49,6 +50,15 @@ export function useTriggerRun() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["runs"] }),
   });
 }
+
+// GET /config/models (issue #73); `runId` (issue #77) reports "run override"
+// provenance for any field a run's own override touched.
+export const useConfigModels = (runId?: string, enabled = true) =>
+  useQuery({
+    queryKey: ["config-models", runId],
+    queryFn: () => apiFetch<ConfigModels>("/config/models", { query: runId ? { run_id: runId } : undefined }),
+    enabled,
+  });
 
 export const useMetrics = (runId: string) =>
   useQuery({
