@@ -14,6 +14,7 @@ import { RunStatePage } from "./pages/RunStatePage";
 import { RunLogs } from "./pages/RunLogs";
 import { Wishlist } from "./pages/Wishlist";
 import { Artifacts } from "./pages/Artifacts";
+import { Settings } from "./pages/Settings";
 
 const qc = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 10_000 } },
@@ -64,6 +65,7 @@ const router = createBrowserRouter([
       },
       { path: "findings/:findingId", element: <FindingDetail /> },
       { path: "wishes", element: <Wishlist /> },
+      { path: "settings", element: <Settings /> },
       { path: "*", element: <div className="state-msg">Not found.</div> },
     ],
   },
