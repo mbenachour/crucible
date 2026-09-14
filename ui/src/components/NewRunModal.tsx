@@ -81,7 +81,7 @@ export function NewRunModal({
         : err.status === 429
           ? err.detail || "too many runs in progress — try again shortly"
           : err.status === 401 || err.status === 403
-            ? "needs a write token — set one in the top bar"
+            ? "needs a write token — set one in Settings"
             : err.message
       : null;
 
@@ -135,7 +135,7 @@ export function NewRunModal({
           {serverMessage && <div className="banner bad">{serverMessage}</div>}
           {!hasToken && (
             <div className="dim">
-              No token set — fine if this API has no auth configured; if it does, set a write token in the top bar.
+              No token set — fine if this API has no auth configured; if it does, set a write token in Settings.
             </div>
           )}
         </div>

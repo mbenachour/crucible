@@ -19,6 +19,28 @@ export interface Health {
   store_ok: boolean;
 }
 
+// --- config/models (issue #73) ---------------------------------------------
+
+/** Per-field provenance: `"default"`, a config file name, or `"env:VAR"`. */
+export interface ModelSource {
+  provider: string;
+  model: string;
+  temperature: string;
+  base_url: string;
+}
+
+export interface ModelEndpoint {
+  provider: string;
+  model: string;
+  temperature: number;
+  base_url: string;
+  source: ModelSource;
+}
+
+export interface ConfigModels {
+  roles: Record<string, ModelEndpoint>;
+}
+
 export type Outcome =
   | "completed"
   | "stopped_at_stub"
