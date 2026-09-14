@@ -23,13 +23,6 @@ const LAUNCHING = new Set(["pending", "cloning"]);
 export const useHealth = () =>
   useQuery({ queryKey: ["health"], queryFn: () => apiFetch<Health>("/health"), retry: false });
 
-export const useConfigModels = () =>
-  useQuery({
-    queryKey: ["config-models"],
-    queryFn: () => apiFetch<ConfigModels>("/config/models"),
-    retry: false,
-  });
-
 export const useRuns = (query: Q) =>
   useQuery({
     queryKey: ["runs", query],
@@ -65,6 +58,7 @@ export const useConfigModels = (runId?: string, enabled = true) =>
     queryKey: ["config-models", runId],
     queryFn: () => apiFetch<ConfigModels>("/config/models", { query: runId ? { run_id: runId } : undefined }),
     enabled,
+    retry: false,
   });
 
 export const useMetrics = (runId: string) =>
