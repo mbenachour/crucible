@@ -46,6 +46,7 @@ from crucible.llm.registry import (
     ModelRegistry,
     ModelRole,
     Provider,
+    default_model_for,
 )
 
 # Hunter lineage (DeepSeek) != validator lineage (Llama) -> §6 assertion passes.
@@ -143,18 +144,30 @@ def _apply_models(
     return out
 
 
-def load_registry(config_path: str | os.PathLike | None = None) -> ModelRegistry:
-    """DEFAULT_ENDPOINTS -> file config (yaml/toml) -> env overrides -> registry."""
-    registry, _origins = load_registry_with_provenance(config_path)
+def load_registry(
+    config_path: str | os.PathLike | None = None,
+    run_override: dict[str, dict] | None = None,
+) -> ModelRegistry:
+    """DEFAULT_ENDPOINTS -> file config (yaml/toml) -> env overrides -> [run
+    override] -> registry."""
+    registry, _origins = load_registry_with_provenance(config_path, run_override)
     return registry
 
 
 def load_registry_with_provenance(
     config_path: str | os.PathLike | None = None,
+    run_override: dict[str, dict] | None = None,
 ) -> tuple[ModelRegistry, dict[ModelRole, dict[str, str]]]:
     """Like `load_registry`, but also returns per-role, per-field provenance:
-    ``{role: {"provider": "default" | "crucible.toml" | "config.yaml" | "env:VAR", ...}}``.
-    Backs `GET /config/models` (issue #73) — "why is hunter on deepseek?"."""
+    ``{role: {"provider": "default" | "crucible.toml" | "config.yaml" | "env:VAR" |
+    "run override", ...}}``. Backs `GET /config/models` (issue #73) — "why is
+    hunter on deepseek?".
+
+    `run_override` (issue #77) is the highest-precedence layer — a per-run
+    partial-endpoint override, applied *after* env resolution — in the same
+    ``{role: {"provider"|"model"|"temperature"|"base_url": ...}}`` shape as a
+    config file's ``models:`` block. See `apply_model_override`.
+    """
     endpoints = dict(DEFAULT_ENDPOINTS)
     origins: dict[ModelRole, dict[str, str]] = {
         role: {field: "default" for field in _TRACKED_FIELDS} for role in ModelRole
@@ -163,7 +176,133 @@ def load_registry_with_provenance(
         endpoints = _apply_models(
             endpoints, _read_config_file(path).get("models"), origin=path.name, origins=origins
         )
-    return ModelRegistry.from_env_with_origins(defaults=endpoints, base_origins=origins)
+    registry, origins = ModelRegistry.from_env_with_origins(defaults=endpoints, base_origins=origins)
+    if run_override:
+        env_endpoints = {role: registry.endpoint(role) for role in ModelRole}
+        merged, origins = apply_model_override(env_endpoints, origins, run_override)
+        registry = ModelRegistry.from_endpoints(merged)
+    return registry, origins
+
+
+RUN_OVERRIDE_ORIGIN = "run override"
+
+
+class ModelOverrideError(ValueError):
+    """Raised for an invalid per-run model override (issue #77): an unknown
+    role, an unresolvable provider/model, or a resulting HUNTER ==
+    VALIDATOR_BUG collision (specs.md §6). Never silently coerced — the caller
+    (the API's `POST /runs`) turns this into a 422."""
+
+
+def apply_model_override(
+    endpoints: dict[ModelRole, ModelEndpoint],
+    origins: dict[ModelRole, dict[str, str]],
+    override: dict[str, dict] | None,
+) -> tuple[dict[ModelRole, ModelEndpoint], dict[ModelRole, dict[str, str]]]:
+    """Layer a per-run model override (issue #77) on top of already-resolved
+    endpoints/origins — the highest-precedence layer, above env vars.
+
+    `override` is ``{role: {"provider": ..., "model": ..., "temperature": ...,
+    "base_url": ...}}`` with only the fields the caller wants to change; a
+    field left out keeps the role's current effective value. Returns a new
+    (endpoints, origins) pair — the inputs are never mutated. Raises
+    `ModelOverrideError` rather than ever silently coercing an invalid
+    request.
+    """
+    out = dict(endpoints)
+    out_origins = {role: dict(origins.get(role, {})) for role in ModelRole}
+    if not override:
+        return out, out_origins
+
+    valid_roles = {r.value for r in ModelRole}
+    unknown = sorted(set(override) - valid_roles)
+    if unknown:
+        raise ModelOverrideError(
+            f"unknown model role(s): {unknown}; expected one of {sorted(valid_roles)}"
+        )
+
+    for role_name, partial in override.items():
+        role = ModelRole(role_name)
+        cur = out[role]
+        partial = partial or {}
+        # Only these four fields are ever accepted — in particular, no
+        # `api_key`/key material can enter an override (issue #73's absolute
+        # no-secrets rule, extended to #77). Reject by field *name* only;
+        # never echo a field's value back in the error.
+        extra_fields = sorted(set(partial) - set(_TRACKED_FIELDS))
+        if extra_fields:
+            raise ModelOverrideError(
+                f"role {role_name!r}: unexpected field(s) {extra_fields} — only "
+                f"{sorted(_TRACKED_FIELDS)} are accepted"
+            )
+        try:
+            provider = (
+                Provider.parse(partial["provider"]) if partial.get("provider") is not None
+                else cur.provider
+            )
+        except ValueError as e:
+            raise ModelOverrideError(f"role {role_name!r}: {e}") from e
+
+        explicit_model = partial.get("model")
+        if explicit_model is not None:
+            model = explicit_model
+        elif provider is cur.provider:
+            model = cur.model
+        elif provider is Provider.OPENROUTER:
+            raise ModelOverrideError(
+                f"role {role_name!r} is routed to openrouter but no model is set — "
+                f'add "model" to the override (e.g. anthropic/claude-sonnet-4)'
+            )
+        else:
+            model = default_model_for(provider) or cur.model
+
+        temperature = partial.get("temperature")
+        base_url = partial.get("base_url")
+        if temperature is None:
+            resolved_temperature = cur.temperature
+        else:
+            try:
+                resolved_temperature = float(temperature)
+            except (TypeError, ValueError) as e:
+                raise ModelOverrideError(
+                    f"role {role_name!r}: invalid temperature {temperature!r}: {e}"
+                ) from e
+            if not (0.0 <= resolved_temperature <= 2.0):
+                raise ModelOverrideError(
+                    f"role {role_name!r}: temperature {resolved_temperature} out of range [0.0, 2.0]"
+                )
+        out[role] = ModelEndpoint(
+            role=role,
+            model=model,
+            provider=provider,
+            base_url=cur.base_url if base_url is None else base_url,
+            api_key=cur.api_key,
+            temperature=resolved_temperature,
+            top_p=cur.top_p,
+            num_ctx=cur.num_ctx,
+            num_predict=cur.num_predict,
+            seed=cur.seed,
+            extra=cur.extra,
+        )
+        role_origin = out_origins.setdefault(role, {})
+        for field, value in (
+            ("provider", partial.get("provider")),
+            ("model", explicit_model),
+            ("temperature", temperature),
+            ("base_url", base_url),
+        ):
+            if value is not None:
+                role_origin[field] = RUN_OVERRIDE_ORIGIN
+
+    # Reuse the registry's own construction assertion (specs.md §6) as the
+    # single source of truth for "hunter and validator_bug must differ" —
+    # rather than duplicating the comparison here.
+    try:
+        ModelRegistry.from_endpoints(out)
+    except RuntimeError as e:
+        raise ModelOverrideError(str(e)) from e
+
+    return out, out_origins
 
 
 def apply_file_tracing_env(config_path: str | os.PathLike | None = None) -> None:

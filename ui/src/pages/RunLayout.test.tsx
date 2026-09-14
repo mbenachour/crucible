@@ -12,6 +12,7 @@ function runFixture(overrides: Partial<Run> = {}): Run {
     created_at: null, finished_at: null, status: "running", outcome: "",
     recon_quality: "", workspace_path: "", report_available: false, counts: {},
     source_spec: "octocat/Hello-World", clone_status: "pending", clone_error: "",
+    model_override: {},
     ...overrides,
   };
 }

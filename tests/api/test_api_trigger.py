@@ -150,3 +150,102 @@ def test_get_run_exposes_launch_fields(trigger_client, store):
     assert j["source_spec"] == "octocat/Hello-World"
     assert j["clone_status"] == "pending"
     assert j["clone_error"] == ""
+
+
+def test_run_without_override_has_empty_model_override(trigger_client, store):
+    store.create_launch("plain1", "octocat/Hello-World")
+    r = trigger_client.get("/runs/plain1")
+    assert r.status_code == 200
+    assert r.json()["model_override"] == {}
+
+
+# --- per-run model overrides (issue #77) ------------------------------------
+
+def test_model_override_accepted_and_passed_to_launch_run(trigger_client):
+    body = {
+        "repo": "octocat/Hello-World",
+        "models": {"hunter": {"provider": "deepseek", "model": "deepseek-chat"}},
+    }
+    with patch("crucible.api.routers.trigger.launch_run", return_value="ov1") as launch:
+        r = trigger_client.post("/runs", json=body)
+    assert r.status_code == 202, r.text
+    launch.assert_called_once()
+    assert launch.call_args.kwargs["model_override"] == {
+        "hunter": {"provider": "deepseek", "model": "deepseek-chat"}
+    }
+
+
+def test_model_override_persisted_and_shown_in_run_detail(trigger_client, store):
+    # store.create_launch is the persistence path launch_run itself calls
+    # synchronously (before the background clone/spawn thread) — exercised
+    # directly here to keep this a run-detail-shape test, not a launcher test.
+    store.create_launch(
+        "ov2", "octocat/Hello-World",
+        model_override={"hunter": {"model": "deepseek-chat"}},
+    )
+    detail = trigger_client.get("/runs/ov2").json()
+    assert detail["model_override"] == {"hunter": {"model": "deepseek-chat"}}
+
+
+def test_model_override_unknown_role_is_422_without_launching(trigger_client):
+    with patch("crucible.api.routers.trigger.launch_run") as launch:
+        r = trigger_client.post("/runs", json={
+            "repo": "octocat/Hello-World",
+            "models": {"not_a_role": {"model": "x"}},
+        })
+    assert r.status_code == 422
+    assert "unknown model role" in r.json()["detail"]
+    launch.assert_not_called()
+
+
+def test_model_override_unresolvable_openrouter_model_is_422(trigger_client):
+    with patch("crucible.api.routers.trigger.launch_run") as launch:
+        r = trigger_client.post("/runs", json={
+            "repo": "octocat/Hello-World",
+            "models": {"recon": {"provider": "openrouter"}},
+        })
+    assert r.status_code == 422
+    assert "openrouter" in r.json()["detail"]
+    launch.assert_not_called()
+
+
+def test_model_override_hunter_eq_validator_via_override_is_422(trigger_client):
+    """Host defaults already differ (deepseek vs ollama); the override alone
+    creates the collision — must still be rejected."""
+    with patch("crucible.api.routers.trigger.launch_run") as launch:
+        r = trigger_client.post("/runs", json={
+            "repo": "octocat/Hello-World",
+            "models": {"validator_bug": {"provider": "deepseek", "model": "deepseek-v4-flash"}},
+        })
+    assert r.status_code == 422
+    assert "different models" in r.json()["detail"]
+    launch.assert_not_called()
+
+
+def test_model_override_hunter_eq_validator_via_override_on_hunter_is_422(trigger_client):
+    with patch("crucible.api.routers.trigger.launch_run") as launch:
+        r = trigger_client.post("/runs", json={
+            "repo": "octocat/Hello-World",
+            "models": {"hunter": {"provider": "ollama", "model": "llama3.1:8b"}},
+        })
+    assert r.status_code == 422
+    assert "different models" in r.json()["detail"]
+    launch.assert_not_called()
+
+
+def test_model_override_rejects_api_key_field(trigger_client):
+    with patch("crucible.api.routers.trigger.launch_run") as launch:
+        r = trigger_client.post("/runs", json={
+            "repo": "octocat/Hello-World",
+            "models": {"hunter": {"api_key": "sk-should-never-be-accepted"}},
+        })
+    assert r.status_code == 422
+    assert "sk-should-never-be-accepted" not in r.text
+    launch.assert_not_called()
+
+
+def test_no_models_key_behaves_exactly_like_before(trigger_client):
+    with patch("crucible.api.routers.trigger.launch_run", return_value="plain2") as launch:
+        r = trigger_client.post("/runs", json={"repo": "octocat/Hello-World"})
+    assert r.status_code == 202
+    assert launch.call_args.kwargs["model_override"] is None

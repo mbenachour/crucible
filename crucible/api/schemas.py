@@ -81,6 +81,10 @@ class RunOut(BaseModel):
     source_spec: str = ""
     clone_status: str = ""
     clone_error: str = ""
+    # Per-run model override (issue #77): role -> partial endpoint, or {} for
+    # a run using the host's effective config as-is. Never carries api_key —
+    # same rule as ModelEndpointOut (issue #73).
+    model_override: dict = Field(default_factory=dict)
 
 
 class MetricsOut(BaseModel):

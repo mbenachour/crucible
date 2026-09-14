@@ -33,6 +33,7 @@ _RUNS_ADDED_COLUMNS = {
     "clone_status": "VARCHAR DEFAULT ''",
     "clone_error": "VARCHAR DEFAULT ''",
     "pid": "INTEGER",
+    "model_override": "JSON",
 }
 
 _MAX_LIMIT = 1000
@@ -116,10 +117,13 @@ class Store:
     # A launch's Run row exists *before* the repo is cloned, so a run_id is
     # available to the caller (and pollable via GET /runs/{id}) immediately.
 
-    def create_launch(self, run_id: str, source_spec: str) -> None:
+    def create_launch(
+        self, run_id: str, source_spec: str, *, model_override: dict | None = None,
+    ) -> None:
         with self.session() as s:
             s.add(Run(run_id=run_id, repo_path="", repo_commit="", primary_language="",
-                      source_spec=source_spec, clone_status="pending"))
+                      source_spec=source_spec, clone_status="pending",
+                      model_override=model_override or None))
 
     def set_clone_status(self, run_id: str, status: str, error: str = "") -> None:
         with self.session() as s:

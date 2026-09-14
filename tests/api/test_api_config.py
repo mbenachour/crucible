@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from crucible.llm.registry import ModelRole
+from tests.api.conftest import RUN_A
 
 ROLES = {r.value for r in ModelRole}
 
@@ -50,6 +51,34 @@ def test_no_api_key_field_anywhere_in_response(client):
 
 
 CANARY = "sk-fake-LEAKCANARY"
+
+
+# --- run_id / run override provenance (issue #77) --------------------------
+
+def test_run_id_with_no_override_is_identical_to_the_hostwide_response(client):
+    plain = client.get("/config/models").json()
+    scoped = client.get("/config/models", params={"run_id": RUN_A}).json()
+    assert scoped == plain
+
+
+def test_run_id_reports_run_override_provenance(client, store):
+    store.create_launch(
+        "ov-run", "octocat/Hello-World",
+        model_override={"hunter": {"provider": "deepseek", "model": "deepseek-chat"}},
+    )
+    body = client.get("/config/models", params={"run_id": "ov-run"}).json()
+    hunter = body["roles"]["hunter"]
+    assert hunter["model"] == "deepseek-chat"
+    assert hunter["source"]["model"] == "run override"
+    assert hunter["source"]["provider"] == "run override"
+    # untouched field / untouched role fall back to the host-effective value
+    assert hunter["source"]["temperature"] == "default"
+    assert body["roles"]["recon"]["source"]["model"] == "default"
+
+
+def test_run_id_unknown_run_is_404(client):
+    r = client.get("/config/models", params={"run_id": "does-not-exist"})
+    assert r.status_code == 404
 
 
 def test_provider_api_keys_never_leak_into_the_response(client, monkeypatch):

@@ -58,6 +58,15 @@ export function useTriggerRun() {
   });
 }
 
+// GET /config/models (issue #73); `runId` (issue #77) reports "run override"
+// provenance for any field a run's own override touched.
+export const useConfigModels = (runId?: string, enabled = true) =>
+  useQuery({
+    queryKey: ["config-models", runId],
+    queryFn: () => apiFetch<ConfigModels>("/config/models", { query: runId ? { run_id: runId } : undefined }),
+    enabled,
+  });
+
 export const useMetrics = (runId: string) =>
   useQuery({
     queryKey: ["metrics", runId],
