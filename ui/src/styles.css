@@ -74,23 +74,51 @@ input, select, textarea {
 input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px solid var(--link); outline-offset: 1px; }
 
 /* layout */
-.shell { display: grid; grid-template-rows: auto 1fr; height: 100%; }
-.topbar {
-  display: flex; align-items: center; gap: 12px; padding: 8px 16px;
-  border-bottom: 1px solid var(--border); background: var(--panel); flex-wrap: wrap;
+.shell { height: 100%; }
+.main { display: flex; height: 100%; min-height: 0; }
+
+/* persistent left side nav (issue #71) — brand+health / + New run / Runs /
+   Wishlist / spacer / collapse toggle / Settings, top to bottom */
+.sidenav {
+  display: flex; flex-direction: column; gap: 2px; flex: none; width: 190px;
+  border-right: 1px solid var(--border); padding: 12px 8px; background: var(--panel);
+  overflow-x: hidden;
 }
-.topbar .brand { font-weight: 700; letter-spacing: .02em; }
-.topbar .spacer { flex: 1; }
-.topbar input { width: 130px; }
-.topbar input.token { width: 90px; }
-.main { display: grid; grid-template-columns: 190px 1fr; min-height: 0; }
-.sidenav { border-right: 1px solid var(--border); padding: 12px 8px; background: var(--panel); }
-.sidenav a { display: block; padding: 6px 10px; border-radius: var(--radius); color: var(--text); }
-.sidenav a.active, .sidenav a:hover { background: var(--panel-2); text-decoration: none; }
-.content { padding: 18px 22px; overflow: auto; min-width: 0; }
+.sidenav-brand {
+  display: flex; align-items: center; gap: 8px; padding: 4px 10px 16px; min-width: 0;
+}
+.sidenav-brand .brand { font-weight: 700; letter-spacing: .02em; white-space: nowrap; overflow: hidden; }
+.sidenav a, .sidenav button.sidenav-newrun, .sidenav button.sidenav-collapse {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  padding: 7px 10px; border-radius: var(--radius); color: var(--text); font: inherit;
+}
+.sidenav button.sidenav-collapse { background: none; border: none; cursor: pointer; color: var(--text-dim); }
+.sidenav a.active, .sidenav a:hover, .sidenav button.sidenav-collapse:hover { background: var(--panel-2); text-decoration: none; }
+.sidenav a:focus-visible { outline: 2px solid var(--link); outline-offset: 1px; }
+.sidenav button.sidenav-newrun { justify-content: flex-start; margin-bottom: 6px; }
+.sidenav-spacer { flex: 1; }
+.sidenav .label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* collapsed: icon-only, width shrinks, labels hidden — no reflow of content
+   since it's a fixed width either way */
+.sidenav.collapsed { width: 52px; }
+.sidenav.collapsed .label,
+.sidenav.collapsed .sidenav-brand .brand { display: none; }
+.sidenav.collapsed .sidenav-brand,
+.sidenav.collapsed a,
+.sidenav.collapsed button.sidenav-newrun,
+.sidenav.collapsed button.sidenav-collapse { justify-content: center; }
+
+.content { padding: 18px 22px; overflow: auto; min-width: 0; flex: 1; }
+
 @media (max-width: 720px) {
-  .main { grid-template-columns: 1fr; }
-  .sidenav { display: flex; gap: 4px; overflow-x: auto; border-right: none; border-bottom: 1px solid var(--border); }
+  .sidenav:not(.collapsed) { width: 52px; }
+  .sidenav:not(.collapsed) .label,
+  .sidenav:not(.collapsed) .sidenav-brand .brand { display: none; }
+  .sidenav:not(.collapsed) .sidenav-brand,
+  .sidenav:not(.collapsed) a,
+  .sidenav:not(.collapsed) button.sidenav-newrun,
+  .sidenav:not(.collapsed) button.sidenav-collapse { justify-content: center; }
 }
 
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
