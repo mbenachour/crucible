@@ -35,6 +35,31 @@ class HealthOut(BaseModel):
     store_ok: bool
 
 
+# --- config -------------------------------------------------------------
+
+class ModelSourceOut(BaseModel):
+    """Per-field provenance: ``"default"``, a config file name, or ``"env:VAR"``."""
+
+    provider: str
+    model: str
+    temperature: str
+    base_url: str
+
+
+class ModelEndpointOut(BaseModel):
+    """A role's *effective* model binding. Never carries `api_key` — see issue #73."""
+
+    provider: str
+    model: str
+    temperature: float
+    base_url: str
+    source: ModelSourceOut
+
+
+class ConfigModelsOut(BaseModel):
+    roles: dict[str, ModelEndpointOut]
+
+
 # --- runs / reports / metrics / coverage -----------------------------------
 
 class RunOut(BaseModel):

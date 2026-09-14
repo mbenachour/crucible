@@ -105,8 +105,17 @@ def _config_paths(config_path: str | os.PathLike | None) -> list[Path]:
     return [p for name in _AUTO_CONFIG_NAMES if (p := Path(name)).is_file()]
 
 
+# Fields the /config/models endpoint (issue #73) tracks provenance for — the
+# ones that actually appear in the API response, plus `source`.
+_TRACKED_FIELDS = ("provider", "model", "temperature", "base_url")
+
+
 def _apply_models(
-    endpoints: dict[ModelRole, ModelEndpoint], models: dict[str, Any] | None
+    endpoints: dict[ModelRole, ModelEndpoint],
+    models: dict[str, Any] | None,
+    *,
+    origin: str,
+    origins: dict[ModelRole, dict[str, str]],
 ) -> dict[ModelRole, ModelEndpoint]:
     out = dict(endpoints)
     for role in ModelRole:
@@ -127,15 +136,34 @@ def _apply_models(
             seed=tbl.get("seed", cur.seed),
             extra=tbl.get("extra", cur.extra),
         )
+        role_origin = origins.setdefault(role, {})
+        for field in _TRACKED_FIELDS:
+            if field in tbl:
+                role_origin[field] = origin
     return out
 
 
 def load_registry(config_path: str | os.PathLike | None = None) -> ModelRegistry:
     """DEFAULT_ENDPOINTS -> file config (yaml/toml) -> env overrides -> registry."""
+    registry, _origins = load_registry_with_provenance(config_path)
+    return registry
+
+
+def load_registry_with_provenance(
+    config_path: str | os.PathLike | None = None,
+) -> tuple[ModelRegistry, dict[ModelRole, dict[str, str]]]:
+    """Like `load_registry`, but also returns per-role, per-field provenance:
+    ``{role: {"provider": "default" | "crucible.toml" | "config.yaml" | "env:VAR", ...}}``.
+    Backs `GET /config/models` (issue #73) — "why is hunter on deepseek?"."""
     endpoints = dict(DEFAULT_ENDPOINTS)
+    origins: dict[ModelRole, dict[str, str]] = {
+        role: {field: "default" for field in _TRACKED_FIELDS} for role in ModelRole
+    }
     for path in _config_paths(config_path):
-        endpoints = _apply_models(endpoints, _read_config_file(path).get("models"))
-    return ModelRegistry.from_env(defaults=endpoints)
+        endpoints = _apply_models(
+            endpoints, _read_config_file(path).get("models"), origin=path.name, origins=origins
+        )
+    return ModelRegistry.from_env_with_origins(defaults=endpoints, base_origins=origins)
 
 
 def apply_file_tracing_env(config_path: str | os.PathLike | None = None) -> None:
