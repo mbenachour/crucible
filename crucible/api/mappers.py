@@ -22,6 +22,7 @@ def run_out(r: Run, counts: dict[str, int] | None = None) -> RunOut:
         source_spec=r.source_spec or "",
         clone_status=r.clone_status or "",
         clone_error=r.clone_error or "",
+        model_override=r.model_override or {},
     )
 
 

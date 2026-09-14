@@ -622,6 +622,11 @@
             ],
             "title": "Finished At"
           },
+          "model_override": {
+            "additionalProperties": true,
+            "title": "Model Override",
+            "type": "object"
+          },
           "outcome": {
             "title": "Outcome",
             "type": "string"
@@ -815,6 +820,22 @@
       },
       "TriggerRunIn": {
         "properties": {
+          "models": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "optional per-role model override (issue #77): role -> a partial endpoint object with any of provider/model/temperature/base_url. Omitted or empty means 'use the host config as-is'. Unknown roles or fields, an unresolvable provider/model, or a resulting hunter == validator_bug collision are all rejected with 422.",
+            "title": "Models"
+          },
           "ref": {
             "anyOf": [
               {
@@ -1028,6 +1049,24 @@
     "/config/models": {
       "get": {
         "operationId": "get_config_models_config_models_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "run_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Run Id"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -1038,6 +1077,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Get Config Models",

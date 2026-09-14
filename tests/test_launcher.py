@@ -61,6 +61,46 @@ def test_launch_run_returns_immediately_with_a_pending_row(tmp_path):
         assert "--repo" in argv
 
 
+def test_launch_run_persists_and_threads_through_a_model_override(tmp_path):
+    """issue #77: the override is on the row synchronously and reaches the
+    spawned `crucible run` process as `--model-override <json>`."""
+    store = Store(f"sqlite:///{tmp_path}/f.sqlite")
+    settings = _settings(tmp_path)
+    override = {"hunter": {"provider": "deepseek", "model": "deepseek-chat"}}
+
+    with patch("crucible.api.launcher.clone_repo") as clone, \
+         patch("crucible.api.launcher.subprocess.Popen") as popen:
+        clone.return_value = ClonedRepo(path=tmp_path / "runs/x/repo", commit="a" * 40, url="https://github.com/o/r.git")
+        popen.return_value = SimpleNamespace(pid=4242)
+
+        run_id = launch_run(store, settings, source_spec="o/r", ref=None, model_override=override)
+
+        # persisted synchronously, before the background thread necessarily runs
+        assert store.get_run(run_id).model_override == override
+        assert _wait_for(lambda: store.get_run(run_id).clone_status == "cloned")
+
+    argv = popen.call_args.args[0]
+    i = argv.index("--model-override")
+    import json
+
+    assert json.loads(argv[i + 1]) == override
+
+
+def test_launch_run_without_override_never_adds_the_flag(tmp_path):
+    store = Store(f"sqlite:///{tmp_path}/f.sqlite")
+    settings = _settings(tmp_path)
+
+    with patch("crucible.api.launcher.clone_repo") as clone, \
+         patch("crucible.api.launcher.subprocess.Popen") as popen:
+        clone.return_value = ClonedRepo(path=tmp_path / "runs/x/repo", commit="a" * 40, url="https://github.com/o/r.git")
+        popen.return_value = SimpleNamespace(pid=4242)
+        run_id = launch_run(store, settings, source_spec="o/r", ref=None)
+        assert _wait_for(lambda: store.get_run(run_id).clone_status == "cloned")
+
+    assert store.get_run(run_id).model_override is None
+    assert "--model-override" not in popen.call_args.args[0]
+
+
 def test_launch_run_clone_failure_marks_the_run_failed(tmp_path):
     store = Store(f"sqlite:///{tmp_path}/f.sqlite")
     settings = _settings(tmp_path)

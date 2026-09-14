@@ -1,21 +1,45 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { auth } from "../api/client";
-import { useHealth } from "../api/hooks";
+import { useConfigModels, useHealth } from "../api/hooks";
+import { Q } from "../components/states";
 import { useTheme } from "../lib/theme";
+import type { ModelEndpoint } from "../api/types";
 
-/**
- * Minimal settings page: just the Connection + Appearance controls that used
- * to live in the top bar (issue #71). This is the landing spot issue #72
- * will expand into a full settings page — a Models section is coming later,
- * once #73 lands the endpoint it needs. Don't add it here yet.
- */
+const ROLE_LABEL: Record<string, string> = {
+  recon: "recon",
+  hunter: "hunter",
+  validator_bug: "validator (bug)",
+  validator_reach: "validator (reach)",
+};
+
+function ModelRow({ role, e }: { role: string; e: ModelEndpoint }) {
+  return (
+    <tr>
+      <td>{ROLE_LABEL[role] ?? role}</td>
+      <td className="mono">
+        {e.provider}
+        <div className="dim">{e.source.provider}</div>
+      </td>
+      <td className="mono">
+        {e.model}
+        <div className="dim">{e.source.model}</div>
+      </td>
+      <td className="mono">
+        {e.temperature}
+        <div className="dim">{e.source.temperature}</div>
+      </td>
+    </tr>
+  );
+}
+
 export function Settings() {
   const qc = useQueryClient();
   const [base, setBase] = useState(auth.getBase());
   const [token, setToken] = useState(auth.getToken());
   const [theme, setTheme] = useTheme();
   const health = useHealth();
+  const models = useConfigModels();
 
   function applyConn() {
     auth.setBase(base);
@@ -59,20 +83,60 @@ export function Settings() {
               onKeyDown={(e) => e.key === "Enter" && applyConn()}
             />
           </label>
-          <div className="dim">{healthLine}</div>
+          <div className="dim">
+            No token set — fine if this API has no auth configured; set a write token here to start runs or resolve wishes on one that does.
+          </div>
+          <div>{healthLine}</div>
         </div>
       </section>
 
-      <section className="panel" style={{ maxWidth: 480 }}>
+      <section className="panel" style={{ marginBottom: 16, maxWidth: 480 }}>
         <h3>Appearance</h3>
-        <label className="row">
+        <div className="row">
           <span className="dim">Theme</span>
-          <select aria-label="theme" value={theme} onChange={(e) => setTheme(e.target.value)}>
-            <option value="system">System 🖥️</option>
-            <option value="light">Light ☀️</option>
-            <option value="dark">Dark 🌙</option>
-          </select>
-        </label>
+          <div className="segmented" role="radiogroup" aria-label="theme">
+            {(["system", "light", "dark"] as const).map((t) => (
+              <label key={t}>
+                <input
+                  type="radio"
+                  name="theme"
+                  value={t}
+                  checked={theme === t}
+                  onChange={() => setTheme(t)}
+                />
+                {t}
+              </label>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="panel" style={{ maxWidth: 640 }}>
+        <h3>Models</h3>
+        <Q q={models} notFound={<div className="dim">unavailable — this API doesn't expose model config yet.</div>}>
+          {(d) => (
+            <div className="tbl-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>role</th>
+                    <th>provider</th>
+                    <th>model</th>
+                    <th>temp</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(d.roles).map(([role, e]) => (
+                    <ModelRow key={role} role={role} e={e} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Q>
+        <div className="dim" style={{ marginTop: 8 }}>
+          Read-only for now — small text under each value shows where it came from (default / config.yaml / env var).
+        </div>
       </section>
     </div>
   );

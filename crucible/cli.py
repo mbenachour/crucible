@@ -31,6 +31,15 @@ def run(
     checkpoint_db: Path = typer.Option(Path("checkpoints.sqlite"), "--checkpoint-db"),
     store_url: str = typer.Option("sqlite:///findings.sqlite", "--store-url"),
     config: str = typer.Option("", "--config", help="path to config.yaml or crucible.toml"),
+    model_override: str = typer.Option(
+        "", "--model-override",
+        help=(
+            "JSON per-role partial model endpoint override (issue #77): "
+            '{"hunter": {"model": "..."}, ...}. Set by the API launcher for a '
+            "run started with a models override; the highest-precedence layer, "
+            "above env vars."
+        ),
+    ),
     resume: str = typer.Option("", "--resume", help="run_id to resume from checkpoint"),
     run_id_flag: str = typer.Option(
         "", "--run-id",
@@ -54,6 +63,7 @@ def run(
     ),
 ) -> None:
     """Recon -> Hunt -> Validate -> Report, end to end (§14.1)."""
+    import json
     import time
 
     _load_dotenv()
@@ -82,7 +92,8 @@ def run(
     setup_tracing()  # opt-in via CRUCIBLE_OTEL / OTEL_EXPORTER_OTLP_ENDPOINT / LangSmith
     started = time.monotonic()
 
-    registry = load_registry(config or None)
+    run_override = json.loads(model_override) if model_override else None
+    registry = load_registry(config or None, run_override)
     store = Store(store_url)
 
     sandbox_provider = None

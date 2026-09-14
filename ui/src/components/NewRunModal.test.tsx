@@ -86,4 +86,73 @@ describe("NewRunModal", () => {
     fireEvent.click(screen.getByText("Start run"));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
+
+  describe("models section (issue #77)", () => {
+    const CONFIG_MODELS = {
+      roles: {
+        recon: {
+          provider: "ollama", model: "qwen2.5-coder:7b", temperature: 0.1,
+          base_url: "http://localhost:11434",
+          source: { provider: "default", model: "default", temperature: "default", base_url: "default" },
+        },
+        hunter: {
+          provider: "deepseek", model: "deepseek-v4-flash", temperature: 0.3,
+          base_url: "https://api.deepseek.com",
+          source: { provider: "default", model: "default", temperature: "default", base_url: "default" },
+        },
+      },
+    };
+
+    function mockFetchDistinguishingConfigFromTrigger(onTrigger: (body: unknown) => void) {
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+        if (String(input).includes("/config/models")) {
+          return new Response(JSON.stringify(CONFIG_MODELS), { status: 200 });
+        }
+        onTrigger(init?.body ? JSON.parse(init.body as string) : null);
+        return new Response(JSON.stringify({ run_id: "abc123", clone_status: "pending" }), { status: 202 });
+      });
+    }
+
+    it("is closed by default and makes no request until expanded", () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch");
+      renderModal();
+      expect(screen.getByText(/Models — use host config/)).toBeTruthy();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it("prefills from GET /config/models once expanded", async () => {
+      mockFetchDistinguishingConfigFromTrigger(() => {});
+      renderModal();
+      fireEvent.click(screen.getByText(/Models — use host config/));
+      expect(((await screen.findByLabelText("hunter model")) as HTMLInputElement).value).toBe("deepseek-v4-flash");
+      expect((screen.getByLabelText("recon provider") as HTMLInputElement).value).toBe("ollama");
+    });
+
+    it("submits an override only for the field actually edited", async () => {
+      const posted: { models?: Record<string, unknown> }[] = [];
+      mockFetchDistinguishingConfigFromTrigger((body) => {
+        posted.push(body as { models?: Record<string, unknown> });
+      });
+      renderModal();
+      fireEvent.change(screen.getByPlaceholderText(/owner\/repo/i), { target: { value: "octocat/Hello-World" } });
+      fireEvent.click(screen.getByText(/Models — use host config/));
+      await screen.findByLabelText("hunter model");
+      fireEvent.change(screen.getByLabelText("hunter model"), { target: { value: "deepseek-chat" } });
+      fireEvent.click(screen.getByText("Start run"));
+      await waitFor(() => expect(posted).toHaveLength(1));
+      expect(posted[0].models).toEqual({ hunter: { model: "deepseek-chat" } });
+    });
+
+    it("submits no override at all when the section is left untouched", async () => {
+      const posted: { models?: unknown }[] = [];
+      mockFetchDistinguishingConfigFromTrigger((body) => {
+        posted.push(body as { models?: unknown });
+      });
+      renderModal();
+      fireEvent.change(screen.getByPlaceholderText(/owner\/repo/i), { target: { value: "octocat/Hello-World" } });
+      fireEvent.click(screen.getByText("Start run"));
+      await waitFor(() => expect(posted).toHaveLength(1));
+      expect(posted[0].models).toBeUndefined();
+    });
+  });
 });

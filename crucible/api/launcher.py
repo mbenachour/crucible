@@ -8,6 +8,7 @@ outlives both the request and the API process.
 
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
 import sys
@@ -20,19 +21,30 @@ from crucible.repo_acquire import CloneError, RepoRefError, clone_repo
 log = logging.getLogger("crucible.api.launcher")
 
 
-def launch_run(store, settings, *, source_spec: str, ref: str | None = None) -> str:
+def launch_run(
+    store, settings, *, source_spec: str, ref: str | None = None,
+    model_override: dict | None = None,
+) -> str:
     """Pre-register the `Run` row and return its id immediately; clone + spawn
-    happen on a background thread."""
+    happen on a background thread.
+
+    `model_override` (issue #77) — already validated by the caller (`POST
+    /runs`) — is persisted on the row and threaded through to the spawned
+    `crucible run` process via `--model-override`."""
     run_id = uuid.uuid4().hex[:12]
-    store.create_launch(run_id, source_spec)
+    store.create_launch(run_id, source_spec, model_override=model_override)
     thread = threading.Thread(
-        target=_do_launch, args=(store, settings, run_id, source_spec, ref), daemon=True,
+        target=_do_launch, args=(store, settings, run_id, source_spec, ref, model_override),
+        daemon=True,
     )
     thread.start()
     return run_id
 
 
-def _do_launch(store, settings, run_id: str, source_spec: str, ref: str | None) -> None:
+def _do_launch(
+    store, settings, run_id: str, source_spec: str, ref: str | None,
+    model_override: dict | None = None,
+) -> None:
     run_root = Path(settings.runs_dir) / run_id
     repo_dir = run_root / "repo"
     workspace_dir = run_root / "workspace"
@@ -65,6 +77,8 @@ def _do_launch(store, settings, run_id: str, source_spec: str, ref: str | None) 
         "--store-url", settings.store_url,
         "--checkpoint-db", settings.checkpoint_db,
     ]
+    if model_override:
+        argv += ["--model-override", json.dumps(model_override)]
     try:
         proc = subprocess.Popen(
             argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,

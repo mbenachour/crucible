@@ -78,9 +78,11 @@ export async function apiFetch<T>(path: string, opts: FetchOpts = {}): Promise<T
   if (!res.ok) {
     let body: ErrorBody | string;
     try {
-      body = (await res.json()) as ErrorBody;
+      // clone() first: a failed .json() parse still consumes the body stream,
+      // which would make the .text() fallback throw "body already read".
+      body = (await res.clone().json()) as ErrorBody;
     } catch {
-      body = (await res.text()) || res.statusText;
+      body = (await res.text().catch(() => "")) || res.statusText;
     }
     throw new ApiError(res.status, body);
   }

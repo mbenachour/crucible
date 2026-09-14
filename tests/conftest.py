@@ -6,10 +6,25 @@ trees, no network, no installs. Session-scoped so `build_seed` runs once each.
 
 from __future__ import annotations
 
+import os
 import textwrap
 from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_environ():
+    """Restore `os.environ` after every test. `crucible.cli._load_dotenv` (run
+    by the CLI tests) `setdefault`s the developer's `.env` into the process
+    environment, and provenance tests in `test_config.py` then see
+    `env:DEEPSEEK_MODEL` where they expect `default` — a test-order failure
+    that only shows on machines with a `.env`. Snapshot/restore keeps every
+    test blind to what ran before it."""
+    saved = dict(os.environ)
+    yield
+    os.environ.clear()
+    os.environ.update(saved)
 
 
 def _write(root: Path, files: dict[str, str]) -> Path:
