@@ -67,6 +67,7 @@ class CatalogModelOut(BaseModel):
     id: str
     label: str
     family: str
+    size: str  # "small" | "mid" | "big" — rough cost/capability tier
 
 
 class ConfigCatalogOut(BaseModel):

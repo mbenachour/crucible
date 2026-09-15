@@ -9,7 +9,7 @@
 
 # --- Model matrix: one model per agent role --------------------------------
 # Every role is OpenRouter (issue #80) — no `provider` field. `model` must be
-# one of the curated ids in crucible/llm/catalog.py (DeepSeek + Qwen, for now;
+# one of the curated ids in crucible/llm/catalog.py (DeepSeek/Qwen/GLM, for now;
 # also served over the API at GET /config/catalog).
 # Hunter and validator_bug models MUST differ (specs.md §6).
 models:

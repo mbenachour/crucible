@@ -47,6 +47,7 @@ export interface CatalogModel {
   id: string;
   label: string;
   family: string;
+  size: string; // "small" | "mid" | "big"
 }
 
 export interface ConfigCatalog {

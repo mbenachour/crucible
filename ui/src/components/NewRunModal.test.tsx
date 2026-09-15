@@ -105,11 +105,14 @@ describe("NewRunModal", () => {
     const CATALOG = {
       families: {
         deepseek: [
-          { id: "deepseek/deepseek-chat-v3.1", label: "DeepSeek Chat V3.1", family: "deepseek" },
-          { id: "deepseek/deepseek-r1-0528", label: "DeepSeek R1 (0528)", family: "deepseek" },
+          { id: "deepseek/deepseek-chat-v3.1", label: "DeepSeek Chat V3.1", family: "deepseek", size: "mid" },
+          { id: "deepseek/deepseek-r1-0528", label: "DeepSeek R1 (0528)", family: "deepseek", size: "big" },
         ],
         qwen: [
-          { id: "qwen/qwen-2.5-72b-instruct", label: "Qwen 2.5 72B Instruct", family: "qwen" },
+          { id: "qwen/qwen-2.5-72b-instruct", label: "Qwen 2.5 72B Instruct", family: "qwen", size: "big" },
+        ],
+        glm: [
+          { id: "z-ai/glm-4.7-flash", label: "GLM 4.7 Flash", family: "glm", size: "small" },
         ],
       },
     };

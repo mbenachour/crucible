@@ -11,12 +11,16 @@ const HEALTH: Health = { status: "ok", version: "0.9.0", store_ok: true };
 const CATALOG: ConfigCatalog = {
   families: {
     deepseek: [
-      { id: "deepseek/deepseek-chat-v3.1", label: "DeepSeek Chat V3.1", family: "deepseek" },
-      { id: "deepseek/deepseek-r1-0528", label: "DeepSeek R1 (0528)", family: "deepseek" },
+      { id: "deepseek/deepseek-chat-v3.1", label: "DeepSeek Chat V3.1", family: "deepseek", size: "mid" },
+      { id: "deepseek/deepseek-r1-0528", label: "DeepSeek R1 (0528)", family: "deepseek", size: "big" },
     ],
     qwen: [
-      { id: "qwen/qwen-2.5-72b-instruct", label: "Qwen 2.5 72B Instruct", family: "qwen" },
-      { id: "qwen/qwen3-32b", label: "Qwen3 32B", family: "qwen" },
+      { id: "qwen/qwen-2.5-72b-instruct", label: "Qwen 2.5 72B Instruct", family: "qwen", size: "big" },
+      { id: "qwen/qwen3-32b", label: "Qwen3 32B", family: "qwen", size: "mid" },
+    ],
+    glm: [
+      { id: "z-ai/glm-4.7-flash", label: "GLM 4.7 Flash", family: "glm", size: "small" },
+      { id: "z-ai/glm-5.3", label: "GLM 5.3", family: "glm", size: "big" },
     ],
   },
 };

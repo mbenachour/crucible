@@ -26,7 +26,9 @@ router = APIRouter(tags=["config"], dependencies=[Depends(require_read)])
 def get_config_catalog() -> ConfigCatalogOut:
     return ConfigCatalogOut(
         families={
-            family: [CatalogModelOut(id=m.id, label=m.label, family=m.family) for m in models]
+            family: [
+                CatalogModelOut(id=m.id, label=m.label, family=m.family, size=m.size) for m in models
+            ]
             for family, models in families().items()
         }
     )

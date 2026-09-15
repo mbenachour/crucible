@@ -1,6 +1,7 @@
 import { useConfigCatalog } from "../api/hooks";
 
-const FAMILY_LABEL: Record<string, string> = { deepseek: "DeepSeek", qwen: "Qwen" };
+const FAMILY_LABEL: Record<string, string> = { deepseek: "DeepSeek", qwen: "Qwen", glm: "GLM" };
+const SIZE_LABEL: Record<string, string> = { small: "small", mid: "mid", big: "big" };
 
 /** A model id dropdown grouped by family (issue #80) — every role is
  * OpenRouter, so there's no provider field anywhere near this; picking a
@@ -37,7 +38,7 @@ export function ModelSelect({
         <optgroup key={family} label={FAMILY_LABEL[family] ?? family}>
           {models.map((m) => (
             <option key={m.id} value={m.id}>
-              {m.label}
+              {m.label} ({SIZE_LABEL[m.size] ?? m.size})
             </option>
           ))}
         </optgroup>

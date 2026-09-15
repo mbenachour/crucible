@@ -217,7 +217,7 @@ crucible --help
 
 OpenRouter only (`crucible/llm/registry.py`) — one hosted key, any model. Which
 model each role uses is picked from the curated catalog in
-`crucible/llm/catalog.py` (DeepSeek + Qwen, for now — see issue #80). Defaults
+`crucible/llm/catalog.py` (DeepSeek/Qwen/GLM, for now — see issue #80). Defaults
 draw hunter and validator_bug from **different lineages** (the §6 assertion).
 
 Override per role, highest precedence last: `crucible/config.py` defaults →

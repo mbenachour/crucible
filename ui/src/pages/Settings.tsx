@@ -121,7 +121,7 @@ export function Settings() {
       <section className="panel" style={{ maxWidth: 640 }}>
         <h3>Models</h3>
         <div className="dim" style={{ marginBottom: 8 }}>
-          Every role runs on OpenRouter — one hosted key, any model, DeepSeek and Qwen only for now.
+          Every role runs on OpenRouter — one hosted key, any model, DeepSeek/Qwen/GLM only for now.
         </div>
         <Q q={models} notFound={<div className="dim">unavailable — this API doesn't expose model config yet.</div>}>
           {(d) => (

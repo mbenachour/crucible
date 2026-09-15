@@ -13,7 +13,7 @@ only. The file carries non-secret routing and toggles.
 
 OpenRouter only (issue #80) — one hosted key (``OPENROUTER_API_KEY``), any
 model. Which model each role uses is chosen from the curated catalog in
-`crucible.llm.catalog` (DeepSeek + Qwen, for now); the defaults below draw
+`crucible.llm.catalog` (DeepSeek/Qwen/GLM, for now); the defaults below draw
 HUNTER and VALIDATOR_BUG from different families so the §6 "structurally
 different models" assertion holds out of the box.
 

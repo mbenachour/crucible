@@ -96,14 +96,20 @@ def test_provider_api_keys_never_leak_into_the_response(client, monkeypatch):
 
 # --- GET /config/catalog (issue #80) ----------------------------------------
 
-def test_catalog_has_deepseek_and_qwen_families(client):
+# OpenRouter's id prefix per family — GLM is hosted under "z-ai/", not "glm/".
+_ID_PREFIX = {"deepseek": "deepseek/", "qwen": "qwen/", "glm": "z-ai/"}
+
+
+def test_catalog_has_deepseek_qwen_and_glm_families_with_a_size_spread(client):
     resp = client.get("/config/catalog")
     assert resp.status_code == 200
     body = resp.json()
-    assert set(body["families"]) == {"deepseek", "qwen"}
+    assert set(body["families"]) == {"deepseek", "qwen", "glm"}
     for family, models in body["families"].items():
         assert models  # non-empty
+        assert {m["size"] for m in models} >= {"small"}  # every family has at least a small tier
         for m in models:
             assert m["family"] == family
-            assert m["id"].startswith(f"{family}/")
+            assert m["id"].startswith(_ID_PREFIX[family])
             assert m["label"]
+            assert m["size"] in {"small", "mid", "big"}
