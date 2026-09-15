@@ -11,7 +11,7 @@ def _ep(role, model):
 
 def _endpoints(hunter="deepseek/deepseek-chat-v3.1", validator_bug="qwen/qwen3-32b"):
     return {
-        ModelRole.RECON: _ep(ModelRole.RECON, "qwen/qwen-2.5-coder-32b-instruct"),
+        ModelRole.RECON: _ep(ModelRole.RECON, "qwen/qwen-2.5-72b-instruct"),
         ModelRole.HUNTER: _ep(ModelRole.HUNTER, hunter),
         ModelRole.VALIDATOR_BUG: _ep(ModelRole.VALIDATOR_BUG, validator_bug),
         ModelRole.VALIDATOR_REACH: _ep(ModelRole.VALIDATOR_REACH, "deepseek/deepseek-r1-0528"),
@@ -97,9 +97,9 @@ def test_openrouter_matrix_from_env(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-env")
     monkeypatch.setenv("OPENROUTER_BASE_URL", "https://proxy.example/api/v1")
     for role, model in (
-        ("RECON", "qwen/qwen-2.5-coder-32b-instruct"),
+        ("RECON", "qwen/qwen-2.5-72b-instruct"),
         ("HUNTER", "deepseek/deepseek-chat-v3.1"),
-        ("VALIDATOR_BUG", "qwen/qwen3-235b-a22b-thinking-2507"),
+        ("VALIDATOR_BUG", "qwen/qwen3-32b"),
         ("VALIDATOR_REACH", "deepseek/deepseek-r1-0528"),
     ):
         monkeypatch.setenv(f"CRUCIBLE_MODEL_{role}", model)

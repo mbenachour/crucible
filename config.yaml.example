@@ -14,13 +14,13 @@
 # Hunter and validator_bug models MUST differ (specs.md §6).
 models:
   recon:
-    model: qwen/qwen-2.5-coder-32b-instruct
+    model: qwen/qwen-2.5-72b-instruct
     temperature: 0.1
   hunter:
     model: deepseek/deepseek-chat-v3.1
     temperature: 0.3
   validator_bug:
-    model: qwen/qwen3-235b-a22b-thinking-2507
+    model: qwen/qwen3-32b
     temperature: 0.1
   validator_reach:
     model: deepseek/deepseek-r1-0528

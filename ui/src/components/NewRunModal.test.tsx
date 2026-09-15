@@ -91,7 +91,7 @@ describe("NewRunModal", () => {
     const CONFIG_MODELS = {
       roles: {
         recon: {
-          provider: "openrouter", model: "qwen/qwen-2.5-coder-32b-instruct", temperature: 0.1,
+          provider: "openrouter", model: "qwen/qwen-2.5-72b-instruct", temperature: 0.1,
           base_url: "https://openrouter.ai/api/v1",
           source: { model: "default", temperature: "default", base_url: "default" },
         },
@@ -109,7 +109,7 @@ describe("NewRunModal", () => {
           { id: "deepseek/deepseek-r1-0528", label: "DeepSeek R1 (0528)", family: "deepseek" },
         ],
         qwen: [
-          { id: "qwen/qwen-2.5-coder-32b-instruct", label: "Qwen 2.5 Coder 32B", family: "qwen" },
+          { id: "qwen/qwen-2.5-72b-instruct", label: "Qwen 2.5 72B Instruct", family: "qwen" },
         ],
       },
     };

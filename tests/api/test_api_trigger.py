@@ -238,7 +238,7 @@ def test_model_override_hunter_eq_validator_via_override_on_hunter_is_422(trigge
     with patch("crucible.api.routers.trigger.launch_run") as launch:
         r = trigger_client.post("/runs", json={
             "repo": "octocat/Hello-World",
-            "models": {"hunter": {"model": "qwen/qwen3-235b-a22b-thinking-2507"}},
+            "models": {"hunter": {"model": "qwen/qwen3-32b"}},
         })
     assert r.status_code == 422
     assert "different models" in r.json()["detail"]

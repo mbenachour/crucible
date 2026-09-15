@@ -21,12 +21,12 @@ _MATRIX_YAML = textwrap.dedent(
     """
     models:
       recon:
-        model: qwen/qwen-2.5-coder-32b-instruct
+        model: qwen/qwen-2.5-72b-instruct
         temperature: 0.15
       hunter:
         model: deepseek/deepseek-chat-v3.1
       validator_bug:
-        model: qwen/qwen3-235b-a22b-thinking-2507
+        model: qwen/qwen3-32b
       validator_reach:
         model: deepseek/deepseek-r1-0528
     tracing:
@@ -53,7 +53,7 @@ def test_yaml_config_populates_the_model_matrix(tmp_path, monkeypatch):
     reg = load_registry(str(cfg))
     assert reg.endpoint(ModelRole.RECON).provider is Provider.OPENROUTER
     assert reg.endpoint(ModelRole.HUNTER).model == "deepseek/deepseek-chat-v3.1"
-    assert reg.endpoint(ModelRole.VALIDATOR_BUG).model == "qwen/qwen3-235b-a22b-thinking-2507"
+    assert reg.endpoint(ModelRole.VALIDATOR_BUG).model == "qwen/qwen3-32b"
     assert reg.endpoint(ModelRole.RECON).temperature == pytest.approx(0.15)
 
 
@@ -246,7 +246,7 @@ def test_apply_model_override_rejects_model_outside_catalog():
 
 def test_apply_model_override_rejects_hunter_eq_validator_via_override_on_validator():
     """Host hunter (deepseek/deepseek-chat-v3.1) and host validator_bug
-    (qwen/qwen3-235b-a22b-thinking-2507) differ by default; overriding
+    (qwen/qwen3-32b) differ by default; overriding
     validator_bug to match hunter must 422."""
     reg, origins = load_registry_with_provenance("/nonexistent/config.yaml")
     endpoints = {r: reg.endpoint(r) for r in ModelRole}
@@ -263,7 +263,7 @@ def test_apply_model_override_rejects_hunter_eq_validator_via_override_on_hunter
     with pytest.raises(ModelOverrideError, match="different models"):
         apply_model_override(
             endpoints, origins,
-            {"hunter": {"model": "qwen/qwen3-235b-a22b-thinking-2507"}},
+            {"hunter": {"model": "qwen/qwen3-32b"}},
         )
 
 

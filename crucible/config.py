@@ -17,12 +17,17 @@ model. Which model each role uses is chosen from the curated catalog in
 HUNTER and VALIDATOR_BUG from different families so the §6 "structurally
 different models" assertion holds out of the box.
 
+Every catalog entry — the defaults included — is live-verified against
+OpenRouter to actually support the *forced* ``tool_choice`` call every role
+here emits its structured output through (see `crucible.llm.catalog`'s
+docstring); a model that merely chats fine isn't good enough.
+
 Example ``config.yaml`` — override the model matrix plus tracing toggles::
 
     models:
-      recon:          { model: qwen/qwen-2.5-coder-32b-instruct }
+      recon:          { model: qwen/qwen-2.5-72b-instruct }
       hunter:         { model: deepseek/deepseek-chat-v3.1 }
-      validator_bug:  { model: qwen/qwen3-235b-a22b-thinking-2507 }
+      validator_bug:  { model: qwen/qwen3-32b }
       validator_reach:{ model: deepseek/deepseek-r1-0528 }
     tracing:
       langsmith: { enabled: true, project: crucible }   # LANGSMITH_API_KEY from .env
@@ -45,13 +50,13 @@ from crucible.llm.registry import ModelEndpoint, ModelRegistry, ModelRole
 # Override per role via config.yaml / env / a per-run override as usual.
 DEFAULT_ENDPOINTS: dict[ModelRole, ModelEndpoint] = {
     ModelRole.RECON: ModelEndpoint(
-        role=ModelRole.RECON, model="qwen/qwen-2.5-coder-32b-instruct", temperature=0.1
+        role=ModelRole.RECON, model="qwen/qwen-2.5-72b-instruct", temperature=0.1
     ),
     ModelRole.HUNTER: ModelEndpoint(
         role=ModelRole.HUNTER, model="deepseek/deepseek-chat-v3.1", temperature=0.3
     ),
     ModelRole.VALIDATOR_BUG: ModelEndpoint(
-        role=ModelRole.VALIDATOR_BUG, model="qwen/qwen3-235b-a22b-thinking-2507", temperature=0.1
+        role=ModelRole.VALIDATOR_BUG, model="qwen/qwen3-32b", temperature=0.1
     ),
     ModelRole.VALIDATOR_REACH: ModelEndpoint(
         role=ModelRole.VALIDATOR_REACH, model="deepseek/deepseek-r1-0528", temperature=0.1

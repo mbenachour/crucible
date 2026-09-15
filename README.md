@@ -231,9 +231,9 @@ key stays in `.env`.
 ```yaml
 # config.yaml — one model per role
 models:
-  recon:          { model: qwen/qwen-2.5-coder-32b-instruct }
+  recon:          { model: qwen/qwen-2.5-72b-instruct }
   hunter:         { model: deepseek/deepseek-chat-v3.1 }
-  validator_bug:  { model: qwen/qwen3-235b-a22b-thinking-2507 }   # != hunter (§6)
+  validator_bug:  { model: qwen/qwen3-32b }   # != hunter (§6)
   validator_reach:{ model: deepseek/deepseek-r1-0528 }
 tracing:
   langsmith: { enabled: true, project: crucible }   # LANGSMITH_API_KEY from .env
@@ -244,7 +244,7 @@ wins where both set the same value.
 
 ```bash
 # every value is also settable by env, which overrides the file.
-export CRUCIBLE_MODEL_RECON=qwen/qwen-2.5-coder-32b-instruct
+export CRUCIBLE_MODEL_RECON=qwen/qwen-2.5-72b-instruct
 ```
 
 Secrets: `cp .env.example .env` and fill it in. `.env` is at the repo root

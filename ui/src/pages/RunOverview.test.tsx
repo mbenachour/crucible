@@ -24,7 +24,7 @@ const METRICS: Metrics = {
 
 function effectiveEndpoint(overrides: Partial<ConfigModels["roles"][string]> = {}) {
   return {
-    provider: "openrouter", model: "qwen/qwen-2.5-coder-32b-instruct", temperature: 0.1,
+    provider: "openrouter", model: "qwen/qwen-2.5-72b-instruct", temperature: 0.1,
     base_url: "https://openrouter.ai/api/v1",
     source: { model: "default", temperature: "default", base_url: "default" },
     ...overrides,

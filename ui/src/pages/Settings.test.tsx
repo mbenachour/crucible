@@ -15,8 +15,8 @@ const CATALOG: ConfigCatalog = {
       { id: "deepseek/deepseek-r1-0528", label: "DeepSeek R1 (0528)", family: "deepseek" },
     ],
     qwen: [
-      { id: "qwen/qwen-2.5-coder-32b-instruct", label: "Qwen 2.5 Coder 32B", family: "qwen" },
-      { id: "qwen/qwen3-235b-a22b-thinking-2507", label: "Qwen3 235B Thinking", family: "qwen" },
+      { id: "qwen/qwen-2.5-72b-instruct", label: "Qwen 2.5 72B Instruct", family: "qwen" },
+      { id: "qwen/qwen3-32b", label: "Qwen3 32B", family: "qwen" },
     ],
   },
 };
@@ -24,7 +24,7 @@ const CATALOG: ConfigCatalog = {
 const MODELS: ConfigModels = {
   roles: {
     recon: {
-      provider: "openrouter", model: "qwen/qwen-2.5-coder-32b-instruct", temperature: 0.1, base_url: "http://x",
+      provider: "openrouter", model: "qwen/qwen-2.5-72b-instruct", temperature: 0.1, base_url: "http://x",
       source: { model: "config.yaml", temperature: "default", base_url: "default" },
     },
     hunter: {
@@ -32,7 +32,7 @@ const MODELS: ConfigModels = {
       source: { model: "env:CRUCIBLE_MODEL_HUNTER", temperature: "default", base_url: "default" },
     },
     validator_bug: {
-      provider: "openrouter", model: "qwen/qwen3-235b-a22b-thinking-2507", temperature: 0.1, base_url: "http://x",
+      provider: "openrouter", model: "qwen/qwen3-32b", temperature: 0.1, base_url: "http://x",
       source: { model: "default", temperature: "default", base_url: "default" },
     },
     validator_reach: {
@@ -98,7 +98,7 @@ describe("Settings page", () => {
     expect(hunterSelect.value).toBe("deepseek/deepseek-chat-v3.1");
     expect(hunterSelect.disabled).toBe(true); // read-only for now — see the section note
     expect((screen.getByLabelText<HTMLSelectElement>("recon model")).value).toBe(
-      "qwen/qwen-2.5-coder-32b-instruct",
+      "qwen/qwen-2.5-72b-instruct",
     );
     expect(screen.getAllByText("deepseek/deepseek-r1-0528").length).toBe(1); // validator_reach only
     expect(screen.getByText("env:CRUCIBLE_MODEL_HUNTER")).toBeTruthy();

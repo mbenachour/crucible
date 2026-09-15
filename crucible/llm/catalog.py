@@ -15,7 +15,17 @@ hunter/validator_bug pairing drawn from different families keeps specs.md
 later is a one-table edit here; nothing else needs to change.
 
 Ids are real OpenRouter model ids (verified against `GET /api/v1/models`
-at https://openrouter.ai/api/v1/models) — not aliases or guesses.
+at https://openrouter.ai/api/v1/models) — not aliases or guesses. Every entry
+here has also been live-tested against OpenRouter with a *forced*
+`tool_choice` call — every role in this codebase (`recon.py`, `hunt.py`,
+`dedup.py`, `validate_bug.py`, `validate_reachability.py`) emits its
+structured output that way, so a model that can't do forced tool-choice is
+unusable here regardless of how good it otherwise is. Two ids were tried and
+dropped for exactly that reason: `qwen/qwen-2.5-coder-32b-instruct` (no
+OpenRouter endpoint supports tool use for it at all) and
+`qwen/qwen3-235b-a22b-thinking-2507` (rejects a forced `tool_choice` while in
+its "thinking mode"). Re-verify a new entry against forced tool-choice before
+adding it, not just plain chat.
 """
 
 from __future__ import annotations
@@ -38,9 +48,7 @@ CATALOG: list[CatalogModel] = [
     CatalogModel("deepseek/deepseek-r1-0528", "DeepSeek R1 (0528)", "deepseek"),
     CatalogModel("deepseek/deepseek-v3.1-terminus", "DeepSeek V3.1 Terminus", "deepseek"),
     # --- Qwen ---------------------------------------------------------
-    CatalogModel("qwen/qwen-2.5-coder-32b-instruct", "Qwen 2.5 Coder 32B", "qwen"),
     CatalogModel("qwen/qwen-2.5-72b-instruct", "Qwen 2.5 72B Instruct", "qwen"),
-    CatalogModel("qwen/qwen3-235b-a22b-thinking-2507", "Qwen3 235B Thinking", "qwen"),
     CatalogModel("qwen/qwen3-32b", "Qwen3 32B", "qwen"),
     CatalogModel("qwen/qwen3-30b-a3b", "Qwen3 30B A3B", "qwen"),
 ]
