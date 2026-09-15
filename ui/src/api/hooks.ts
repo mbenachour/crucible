@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "./client";
 import type {
+  ConfigCatalog,
   ConfigModels,
   Coverage,
   Finding,
@@ -59,6 +60,17 @@ export const useConfigModels = (runId?: string, enabled = true) =>
     queryFn: () => apiFetch<ConfigModels>("/config/models", { query: runId ? { run_id: runId } : undefined }),
     enabled,
     retry: false,
+  });
+
+// GET /config/catalog (issue #80): the curated OpenRouter model list, grouped
+// by family — what the model dropdowns render. Static-ish; a long staleTime
+// avoids refetching it on every modal open.
+export const useConfigCatalog = (enabled = true) =>
+  useQuery({
+    queryKey: ["config-catalog"],
+    queryFn: () => apiFetch<ConfigCatalog>("/config/catalog"),
+    enabled,
+    staleTime: 5 * 60_000,
   });
 
 export const useMetrics = (runId: string) =>

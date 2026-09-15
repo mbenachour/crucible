@@ -326,8 +326,8 @@ def _run_orient(seed: Seed, repo: str, run_id: str, deps, errors_path: Path) -> 
     tools = read_only_fs_tools(repo)
     allowed = {t.name for t in tools}
     prompt = load_skill("recon/orient.md")
-    model = deps.registry.chat_model(ModelRole.RECON)
     try:
+        model = deps.registry.chat_model(ModelRole.RECON)
         task = _orient_task_text(seed, repo)
         msgs = _explore(
             deps=deps, run_id=run_id, thread_id=f"{run_id}:recon:orient",
@@ -360,8 +360,12 @@ def _run_map(
     tools = read_only_fs_tools(repo)
     allowed = {t.name for t in tools}
     prompt = load_skill("recon/map.md")
-    model = deps.registry.chat_model(ModelRole.RECON)
     err_lock = threading.Lock()
+    try:
+        model = deps.registry.chat_model(ModelRole.RECON)
+    except Exception as e:  # noqa: BLE001 — resilience: no model, no subsystem maps
+        _log_error(errors_path, "R1b", "chat_model", _fmt_exc(e))
+        return []
 
     def _one(sub: dict) -> SubsystemMap | None:
         try:
@@ -408,8 +412,8 @@ def _run_threatmodel(
     tools = read_only_fs_tools(repo)
     allowed = {t.name for t in tools}
     prompt = load_skill("recon/threatmodel.md")
-    model = deps.registry.chat_model(ModelRole.RECON)
     try:
+        model = deps.registry.chat_model(ModelRole.RECON)
         task = _threatmodel_task_text(seed, architecture_md)
         msgs = _explore(
             deps=deps, run_id=run_id, thread_id=f"{run_id}:recon:threatmodel",

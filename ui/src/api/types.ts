@@ -23,13 +23,13 @@ export interface Health {
 
 /** Per-field provenance: `"default"`, a config file name, or `"env:VAR"`. */
 export interface ModelSource {
-  provider: string;
   model: string;
   temperature: string;
   base_url: string;
 }
 
 export interface ModelEndpoint {
+  /** Always `"openrouter"` (issue #80) — display only, never a choice. */
   provider: string;
   model: string;
   temperature: number;
@@ -39,6 +39,18 @@ export interface ModelEndpoint {
 
 export interface ConfigModels {
   roles: Record<string, ModelEndpoint>;
+}
+
+// --- config/catalog (issue #80) ---------------------------------------------
+
+export interface CatalogModel {
+  id: string;
+  label: string;
+  family: string;
+}
+
+export interface ConfigCatalog {
+  families: Record<string, CatalogModel[]>;
 }
 
 export type Outcome =
@@ -71,10 +83,10 @@ export interface Run {
   model_override: Record<string, ModelOverride>;
 }
 
-// Role -> partial endpoint. Only these four fields are ever accepted —
-// there is no `api_key` field (issue #73's absolute no-secrets rule).
+// Role -> partial endpoint. Only these fields are ever accepted — no
+// `provider` (issue #80: every role is OpenRouter, nothing to choose) and no
+// `api_key` field (issue #73's absolute no-secrets rule).
 export interface ModelOverride {
-  provider?: string;
   model?: string;
   temperature?: number;
   base_url?: string;
@@ -89,26 +101,6 @@ export interface TriggerRunIn {
 export interface TriggerRunOut {
   run_id: string;
   clone_status: CloneStatus;
-}
-
-// GET /config/models (issue #73), ?run_id= (issue #77).
-export interface ModelSource {
-  provider: string;
-  model: string;
-  temperature: string;
-  base_url: string;
-}
-
-export interface ModelEndpointInfo {
-  provider: string;
-  model: string;
-  temperature: number;
-  base_url: string;
-  source: ModelSource;
-}
-
-export interface ConfigModels {
-  roles: Record<string, ModelEndpointInfo>;
 }
 
 export interface Metrics {

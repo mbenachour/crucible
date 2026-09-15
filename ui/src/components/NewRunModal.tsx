@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ApiError, auth } from "../api/client";
 import { useConfigModels, useTriggerRun } from "../api/hooks";
-import type { ModelEndpointInfo, ModelOverride } from "../api/types";
+import { ModelSelect } from "./ModelSelect";
+import type { ModelEndpoint, ModelOverride } from "../api/types";
 
 const SPEC_HINT = "owner/repo or https://github.com/owner/repo.git";
 // Loose client-side mirror of the API's shape check (crucible/repo_acquire.py) —
@@ -14,7 +15,7 @@ const ROLE_LABELS: Record<string, string> = {
   recon: "Recon", hunter: "Hunter", validator_bug: "Validator (bug)", validator_reach: "Validator (reach)",
 };
 
-type FieldEdits = Partial<Record<"provider" | "model" | "temperature" | "base_url", string>>;
+type FieldEdits = Partial<Record<"model" | "temperature" | "base_url", string>>;
 
 /** Collapsed by default — "use host config", and no `GET /config/models`
  * call happens until the user actually expands it: zero added cost on the
@@ -49,9 +50,6 @@ function ModelsOverrideSection({
       const eff = roles[role];
       if (!eff) continue;
       const diff: ModelOverride = {};
-      if (roleEdits.provider !== undefined && roleEdits.provider !== eff.provider) {
-        diff.provider = roleEdits.provider;
-      }
       if (roleEdits.model !== undefined && roleEdits.model !== eff.model) {
         diff.model = roleEdits.model;
       }
@@ -108,7 +106,7 @@ function RoleRow({
   onEdit,
 }: {
   role: string;
-  eff: ModelEndpointInfo;
+  eff: ModelEndpoint;
   edits: FieldEdits;
   onEdit: (field: keyof FieldEdits, value: string) => void;
 }) {
@@ -116,19 +114,11 @@ function RoleRow({
     <fieldset style={{ border: "1px solid var(--border)", borderRadius: 6, padding: 8 }}>
       <legend className="dim" style={{ padding: "0 4px" }}>{ROLE_LABELS[role] ?? role}</legend>
       <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
-        <input
-          aria-label={`${role} provider`}
-          title={`source: ${eff.source.provider}`}
-          value={edits.provider ?? eff.provider}
-          onChange={(e) => onEdit("provider", e.target.value)}
-          style={{ width: 90 }}
-        />
-        <input
-          aria-label={`${role} model`}
-          title={`source: ${eff.source.model}`}
+        <ModelSelect
+          ariaLabel={`${role} model`}
           value={edits.model ?? eff.model}
-          onChange={(e) => onEdit("model", e.target.value)}
-          style={{ width: 180 }}
+          onChange={(v) => onEdit("model", v)}
+          style={{ width: 220 }}
         />
         <input
           aria-label={`${role} temperature`}

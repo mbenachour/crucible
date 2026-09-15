@@ -24,9 +24,9 @@ const METRICS: Metrics = {
 
 function effectiveEndpoint(overrides: Partial<ConfigModels["roles"][string]> = {}) {
   return {
-    provider: "ollama", model: "qwen2.5-coder:7b", temperature: 0.1,
-    base_url: "http://localhost:11434",
-    source: { provider: "default", model: "default", temperature: "default", base_url: "default" },
+    provider: "openrouter", model: "qwen/qwen-2.5-coder-32b-instruct", temperature: 0.1,
+    base_url: "https://openrouter.ai/api/v1",
+    source: { model: "default", temperature: "default", base_url: "default" },
     ...overrides,
   };
 }
@@ -53,8 +53,8 @@ function renderOverview(configModels: ConfigModels) {
 
 describe("RunOverview models panel (issue #77)", () => {
   it("renders the host-config value for a role without an override, untagged", async () => {
-    renderOverview({ roles: { hunter: effectiveEndpoint({ model: "deepseek-v4-flash", provider: "deepseek" }) } });
-    expect(await screen.findByText("deepseek-v4-flash")).toBeTruthy();
+    renderOverview({ roles: { hunter: effectiveEndpoint({ model: "deepseek/deepseek-chat-v3.1" }) } });
+    expect(await screen.findByText("deepseek/deepseek-chat-v3.1")).toBeTruthy();
     expect(screen.queryByText("override")).toBeNull();
   });
 
@@ -62,12 +62,12 @@ describe("RunOverview models panel (issue #77)", () => {
     renderOverview({
       roles: {
         hunter: effectiveEndpoint({
-          model: "deepseek-chat", provider: "deepseek",
-          source: { provider: "run override", model: "run override", temperature: "default", base_url: "default" },
+          model: "deepseek/deepseek-r1-0528",
+          source: { model: "run override", temperature: "default", base_url: "default" },
         }),
       },
     });
-    expect(await screen.findByText("deepseek-chat")).toBeTruthy();
+    expect(await screen.findByText("deepseek/deepseek-r1-0528")).toBeTruthy();
     expect(screen.getAllByText("override").length).toBeGreaterThan(0);
   });
 });

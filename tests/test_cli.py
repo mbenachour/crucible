@@ -16,8 +16,7 @@ from crucible.recon.decompose import ARCHITECTURE_SECTIONS
 runner = CliRunner()
 
 _HERMETIC_ENV = (
-    "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "RECON_LLM", "HUNTER_LLM",
-    "VALIDATOR_BUG_LLM", "VALIDATOR_REACH_LLM",
+    "OPENROUTER_API_KEY",
     "LANGSMITH_TRACING", "LANGSMITH_API_KEY", "LANGCHAIN_TRACING_V2",
     "CRUCIBLE_OTEL", "OTEL_EXPORTER_OTLP_ENDPOINT",
 )
@@ -30,16 +29,13 @@ def test_help():
 
 
 def test_run_completes_end_to_end_and_emits_report(tmp_path, monkeypatch, repo_web):
-    # Hermetic no-model path: default endpoints point at a local Ollama that
-    # isn't running -> connection refused -> logged, every stage continues.
-    # run from a clean dir so the repo's own .env (LangSmith key, DEEPSEEK_API_KEY)
-    # never loads — the run must be fully hermetic
+    # Hermetic no-model path: no OPENROUTER_API_KEY -> chat_model() raises ->
+    # logged, every stage continues with its deterministic fallback.
+    # run from a clean dir so the repo's own .env (LangSmith key,
+    # OPENROUTER_API_KEY) never loads — the run must be fully hermetic
     monkeypatch.chdir(tmp_path)
     for var in _HERMETIC_ENV:
         monkeypatch.delenv(var, raising=False)
-    # force every ollama role at a dead endpoint so a locally-running Ollama
-    # can't turn this into a real (slow) model run
-    monkeypatch.setenv("CRUCIBLE_OLLAMA_BASE_URL", "http://127.0.0.1:1")
     monkeypatch.setenv("CRUCIBLE_HUNT_MAX_TASKS", "1")
     monkeypatch.setenv("CRUCIBLE_HUNT_EXPLORE_LIMIT", "2")
     monkeypatch.setenv("CRUCIBLE_MAX_CYCLES", "1")
@@ -97,7 +93,6 @@ def test_run_id_flag_fills_in_a_pre_registered_row(tmp_path, monkeypatch, repo_w
     monkeypatch.chdir(tmp_path)
     for var in _HERMETIC_ENV:
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.setenv("CRUCIBLE_OLLAMA_BASE_URL", "http://127.0.0.1:1")
     monkeypatch.setenv("CRUCIBLE_RECON_MAX_PARALLEL", "1")
 
     from crucible.store.dao import Store

@@ -18,8 +18,8 @@ dependencies = [
     "langchain>=1.4,<2",
     "langgraph>=1.2,<2",
     "langgraph-checkpoint-sqlite>=3.1",
-    "langchain-ollama>=1.1",
-    "langchain-deepseek>=1.1",
+    # OpenRouter only (issue #80) — OpenRouter is OpenAI-compatible, so
+    # langchain-openai is the only chat-model client Crucible needs.
     "langchain-openai>=1.1",
     "pydantic>=2.6",
     "rich>=13.7",
@@ -34,8 +34,6 @@ dependencies = [
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.5", "httpx>=0.27"]
 # Read-first HTTP API over runs, findings, reports & artifacts (`crucible serve`).
 api = ["fastapi>=0.115", "uvicorn>=0.30"]
-# Extra model providers (Ollama is built in via langchain-ollama).
-providers = ["litellm>=1.40"]
 # Cross-repo reachability (Phase 3): Joern CPG bridge etc.
 codeintel = []
 # Export LangChain/LangGraph traces to a local OTLP collector (specs §13).

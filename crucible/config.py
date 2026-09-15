@@ -7,31 +7,28 @@ Resolution order (lowest to highest precedence):
      (format by suffix: ``.yaml`` / ``.yml`` -> YAML, else TOML)
   3. environment variables (see `ModelRegistry.from_env`)
 
-**Secrets never come from the file** — API keys (``OPENROUTER_API_KEY``,
-``DEEPSEEK_API_KEY``, ``LANGSMITH_API_KEY``) are read from the environment / a
-gitignored ``.env`` only. The file carries non-secret routing and toggles.
+**Secrets never come from the file** — the API key (``OPENROUTER_API_KEY``,
+``LANGSMITH_API_KEY``) is read from the environment / a gitignored ``.env``
+only. The file carries non-secret routing and toggles.
 
-Wired providers: ``ollama`` (local), ``deepseek`` (hosted, OpenAI-compatible;
-needs ``DEEPSEEK_API_KEY``) and ``openrouter`` (one key for any hosted model —
-the "model matrix"; needs ``OPENROUTER_API_KEY`` and a per-role model id). The
-default models are Ollama and chosen so that HUNTER and VALIDATOR_BUG are
-**different lineages** (the §6 assertion). Pull them first, e.g.::
+OpenRouter only (issue #80) — one hosted key (``OPENROUTER_API_KEY``), any
+model. Which model each role uses is chosen from the curated catalog in
+`crucible.llm.catalog` (DeepSeek + Qwen, for now); the defaults below draw
+HUNTER and VALIDATOR_BUG from different families so the §6 "structurally
+different models" assertion holds out of the box.
 
-    ollama pull qwen2.5-coder:7b
-    ollama pull llama3.1:8b
-
-Example ``config.yaml`` — the model matrix on OpenRouter plus tracing toggles::
+Example ``config.yaml`` — override the model matrix plus tracing toggles::
 
     models:
-      recon:          { provider: openrouter, model: qwen/qwen-2.5-coder-32b-instruct }
-      hunter:         { provider: openrouter, model: anthropic/claude-sonnet-4 }
-      validator_bug:  { provider: openrouter, model: openai/gpt-4o }
-      validator_reach:{ provider: openrouter, model: google/gemini-2.0-flash }
+      recon:          { model: qwen/qwen-2.5-coder-32b-instruct }
+      hunter:         { model: deepseek/deepseek-chat-v3.1 }
+      validator_bug:  { model: qwen/qwen3-235b-a22b-thinking-2507 }
+      validator_reach:{ model: deepseek/deepseek-r1-0528 }
     tracing:
       langsmith: { enabled: true, project: crucible }   # LANGSMITH_API_KEY from .env
       otel:      { enabled: false, endpoint: http://localhost:4318 }
 
-The equivalent ``crucible.toml`` still works (``[models.hunter] provider = ...``).
+The equivalent ``crucible.toml`` still works (``[models.hunter] model = ...``).
 """
 
 from __future__ import annotations
@@ -41,30 +38,23 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from crucible.llm.registry import (
-    ModelEndpoint,
-    ModelRegistry,
-    ModelRole,
-    Provider,
-    default_model_for,
-)
+from crucible.llm.catalog import is_allowed
+from crucible.llm.registry import ModelEndpoint, ModelRegistry, ModelRole
 
-# Hunter lineage (DeepSeek) != validator lineage (Llama) -> §6 assertion passes.
-# Hunter defaults to hosted deepseek-v4-flash (needs DEEPSEEK_API_KEY); override
-# per role via config.yaml / env as usual.
+# Hunter (DeepSeek) != validator_bug (Qwen) lineage -> §6 assertion passes.
+# Override per role via config.yaml / env / a per-run override as usual.
 DEFAULT_ENDPOINTS: dict[ModelRole, ModelEndpoint] = {
     ModelRole.RECON: ModelEndpoint(
-        role=ModelRole.RECON, model="qwen2.5-coder:7b", temperature=0.1, num_ctx=16384
+        role=ModelRole.RECON, model="qwen/qwen-2.5-coder-32b-instruct", temperature=0.1
     ),
     ModelRole.HUNTER: ModelEndpoint(
-        role=ModelRole.HUNTER, model="deepseek-v4-flash",
-        provider=Provider.DEEPSEEK, temperature=0.3,
+        role=ModelRole.HUNTER, model="deepseek/deepseek-chat-v3.1", temperature=0.3
     ),
     ModelRole.VALIDATOR_BUG: ModelEndpoint(
-        role=ModelRole.VALIDATOR_BUG, model="llama3.1:8b", temperature=0.1
+        role=ModelRole.VALIDATOR_BUG, model="qwen/qwen3-235b-a22b-thinking-2507", temperature=0.1
     ),
     ModelRole.VALIDATOR_REACH: ModelEndpoint(
-        role=ModelRole.VALIDATOR_REACH, model="llama3.1:8b", temperature=0.1
+        role=ModelRole.VALIDATOR_REACH, model="deepseek/deepseek-r1-0528", temperature=0.1
     ),
 }
 
@@ -107,8 +97,10 @@ def _config_paths(config_path: str | os.PathLike | None) -> list[Path]:
 
 
 # Fields the /config/models endpoint (issue #73) tracks provenance for — the
-# ones that actually appear in the API response, plus `source`.
-_TRACKED_FIELDS = ("provider", "model", "temperature", "base_url")
+# ones that actually appear in the API response, plus `source`. `provider`
+# isn't here: every role is OpenRouter (issue #80), so it's nothing a config
+# file, env var, or override ever *changes* — no provenance to track.
+_TRACKED_FIELDS = ("model", "temperature", "base_url")
 
 
 def _apply_models(
@@ -127,7 +119,6 @@ def _apply_models(
         out[role] = ModelEndpoint(
             role=role,
             model=tbl.get("model", cur.model),
-            provider=Provider.parse(tbl.get("provider", cur.provider.value)),
             base_url=tbl.get("base_url", cur.base_url),
             api_key=tbl.get("api_key", cur.api_key),
             temperature=float(tbl.get("temperature", cur.temperature)),
@@ -202,12 +193,13 @@ def apply_model_override(
     """Layer a per-run model override (issue #77) on top of already-resolved
     endpoints/origins — the highest-precedence layer, above env vars.
 
-    `override` is ``{role: {"provider": ..., "model": ..., "temperature": ...,
-    "base_url": ...}}`` with only the fields the caller wants to change; a
-    field left out keeps the role's current effective value. Returns a new
-    (endpoints, origins) pair — the inputs are never mutated. Raises
-    `ModelOverrideError` rather than ever silently coercing an invalid
-    request.
+    `override` is ``{role: {"model": ..., "temperature": ..., "base_url":
+    ...}}`` with only the fields the caller wants to change; a field left out
+    keeps the role's current effective value. Every role is OpenRouter (issue
+    #80), so there's no `provider` field to accept, and `model` must be one of
+    the curated ids in `crucible.llm.catalog`. Returns a new (endpoints,
+    origins) pair — the inputs are never mutated. Raises `ModelOverrideError`
+    rather than ever silently coercing an invalid request.
     """
     out = dict(endpoints)
     out_origins = {role: dict(origins.get(role, {})) for role in ModelRole}
@@ -225,36 +217,28 @@ def apply_model_override(
         role = ModelRole(role_name)
         cur = out[role]
         partial = partial or {}
-        # Only these four fields are ever accepted — in particular, no
+        # Only these fields are ever accepted — in particular, no
         # `api_key`/key material can enter an override (issue #73's absolute
-        # no-secrets rule, extended to #77). Reject by field *name* only;
-        # never echo a field's value back in the error.
+        # no-secrets rule, extended to #77), and no `provider` (issue #80:
+        # every role is OpenRouter, so there's nothing to choose). Reject by
+        # field *name* only; never echo a field's value back in the error.
         extra_fields = sorted(set(partial) - set(_TRACKED_FIELDS))
         if extra_fields:
             raise ModelOverrideError(
                 f"role {role_name!r}: unexpected field(s) {extra_fields} — only "
                 f"{sorted(_TRACKED_FIELDS)} are accepted"
             )
-        try:
-            provider = (
-                Provider.parse(partial["provider"]) if partial.get("provider") is not None
-                else cur.provider
-            )
-        except ValueError as e:
-            raise ModelOverrideError(f"role {role_name!r}: {e}") from e
 
         explicit_model = partial.get("model")
         if explicit_model is not None:
+            if not is_allowed(explicit_model):
+                raise ModelOverrideError(
+                    f"role {role_name!r}: {explicit_model!r} isn't in the model catalog "
+                    "(GET /config/catalog) — pick a listed DeepSeek or Qwen model id"
+                )
             model = explicit_model
-        elif provider is cur.provider:
-            model = cur.model
-        elif provider is Provider.OPENROUTER:
-            raise ModelOverrideError(
-                f"role {role_name!r} is routed to openrouter but no model is set — "
-                f'add "model" to the override (e.g. anthropic/claude-sonnet-4)'
-            )
         else:
-            model = default_model_for(provider) or cur.model
+            model = cur.model
 
         temperature = partial.get("temperature")
         base_url = partial.get("base_url")
@@ -274,7 +258,6 @@ def apply_model_override(
         out[role] = ModelEndpoint(
             role=role,
             model=model,
-            provider=provider,
             base_url=cur.base_url if base_url is None else base_url,
             api_key=cur.api_key,
             temperature=resolved_temperature,
@@ -286,7 +269,6 @@ def apply_model_override(
         )
         role_origin = out_origins.setdefault(role, {})
         for field, value in (
-            ("provider", partial.get("provider")),
             ("model", explicit_model),
             ("temperature", temperature),
             ("base_url", base_url),

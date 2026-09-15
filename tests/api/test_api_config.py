@@ -18,26 +18,26 @@ def test_shape_has_all_four_roles(client):
     for role in ROLES:
         entry = body["roles"][role]
         assert set(entry) == {"provider", "model", "temperature", "base_url", "source"}
-        assert set(entry["source"]) == {"provider", "model", "temperature", "base_url"}
+        assert entry["provider"] == "openrouter"
+        assert set(entry["source"]) == {"model", "temperature", "base_url"}
         assert isinstance(entry["temperature"], float)
 
 
 def test_hunter_defaults_to_deepseek(client):
     body = client.get("/config/models").json()
     hunter = body["roles"]["hunter"]
-    assert hunter["provider"] == "deepseek"
-    assert hunter["model"] == "deepseek-v4-flash"
-    assert hunter["base_url"] == "https://api.deepseek.com"
-    assert hunter["source"]["provider"] == "default"
+    assert hunter["provider"] == "openrouter"
+    assert hunter["model"] == "deepseek/deepseek-chat-v3.1"
+    assert hunter["base_url"] == "https://openrouter.ai/api/v1"
     assert hunter["source"]["model"] == "default"
 
 
 def test_env_override_is_reflected_with_provenance(client, monkeypatch):
-    monkeypatch.setenv("CRUCIBLE_MODEL_HUNTER", "deepseek-r2")
+    monkeypatch.setenv("CRUCIBLE_MODEL_HUNTER", "deepseek/deepseek-r1-0528")
     monkeypatch.setenv("CRUCIBLE_TEMPERATURE_HUNTER", "0.9")
     body = client.get("/config/models").json()
     hunter = body["roles"]["hunter"]
-    assert hunter["model"] == "deepseek-r2"
+    assert hunter["model"] == "deepseek/deepseek-r1-0528"
     assert hunter["temperature"] == pytest.approx(0.9)
     assert hunter["source"]["model"] == "env:CRUCIBLE_MODEL_HUNTER"
     assert hunter["source"]["temperature"] == "env:CRUCIBLE_TEMPERATURE_HUNTER"
@@ -64,13 +64,12 @@ def test_run_id_with_no_override_is_identical_to_the_hostwide_response(client):
 def test_run_id_reports_run_override_provenance(client, store):
     store.create_launch(
         "ov-run", "octocat/Hello-World",
-        model_override={"hunter": {"provider": "deepseek", "model": "deepseek-chat"}},
+        model_override={"hunter": {"model": "deepseek/deepseek-r1-0528"}},
     )
     body = client.get("/config/models", params={"run_id": "ov-run"}).json()
     hunter = body["roles"]["hunter"]
-    assert hunter["model"] == "deepseek-chat"
+    assert hunter["model"] == "deepseek/deepseek-r1-0528"
     assert hunter["source"]["model"] == "run override"
-    assert hunter["source"]["provider"] == "run override"
     # untouched field / untouched role fall back to the host-effective value
     assert hunter["source"]["temperature"] == "default"
     assert body["roles"]["recon"]["source"]["model"] == "default"
@@ -84,7 +83,6 @@ def test_run_id_unknown_run_is_404(client):
 def test_provider_api_keys_never_leak_into_the_response(client, monkeypatch):
     """Set every provider-key env var this code knows about to a canary value
     and assert it never appears anywhere in the serialised response."""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", CANARY)
     monkeypatch.setenv("OPENROUTER_API_KEY", CANARY)
     monkeypatch.setenv("CRUCIBLE_API_KEY_HUNTER", CANARY)
     monkeypatch.setenv("CRUCIBLE_API_KEY_RECON", CANARY)
@@ -94,3 +92,18 @@ def test_provider_api_keys_never_leak_into_the_response(client, monkeypatch):
     assert resp.status_code == 200
     assert CANARY not in resp.text
     assert "LEAKCANARY" not in resp.text
+
+
+# --- GET /config/catalog (issue #80) ----------------------------------------
+
+def test_catalog_has_deepseek_and_qwen_families(client):
+    resp = client.get("/config/catalog")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body["families"]) == {"deepseek", "qwen"}
+    for family, models in body["families"].items():
+        assert models  # non-empty
+        for m in models:
+            assert m["family"] == family
+            assert m["id"].startswith(f"{family}/")
+            assert m["label"]

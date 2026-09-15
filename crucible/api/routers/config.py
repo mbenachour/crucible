@@ -1,4 +1,5 @@
-"""GET /config/models — effective per-role model config with provenance (issue #73)."""
+"""GET /config/models — effective per-role model config with provenance (issue #73).
+GET /config/catalog — the curated OpenRouter model list (issue #80)."""
 
 from __future__ import annotations
 
@@ -6,12 +7,29 @@ from fastapi import APIRouter, Depends
 
 from crucible.api.deps import get_store, require_read
 from crucible.api.errors import ApiError
-from crucible.api.schemas import ConfigModelsOut, ModelEndpointOut, ModelSourceOut
+from crucible.api.schemas import (
+    CatalogModelOut,
+    ConfigCatalogOut,
+    ConfigModelsOut,
+    ModelEndpointOut,
+    ModelSourceOut,
+)
 from crucible.config import apply_model_override, load_registry_with_provenance
+from crucible.llm.catalog import families
 from crucible.llm.registry import ModelRole
 from crucible.store.dao import Store
 
 router = APIRouter(tags=["config"], dependencies=[Depends(require_read)])
+
+
+@router.get("/config/catalog", response_model=ConfigCatalogOut)
+def get_config_catalog() -> ConfigCatalogOut:
+    return ConfigCatalogOut(
+        families={
+            family: [CatalogModelOut(id=m.id, label=m.label, family=m.family) for m in models]
+            for family, models in families().items()
+        }
+    )
 
 
 @router.get("/config/models", response_model=ConfigModelsOut)
@@ -42,7 +60,6 @@ def get_config_models(
             temperature=e.temperature,
             base_url=e.resolved_base_url(),
             source=ModelSourceOut(
-                provider=o.get("provider", "default"),
                 model=o.get("model", "default"),
                 temperature=o.get("temperature", "default"),
                 base_url=o.get("base_url", "default"),

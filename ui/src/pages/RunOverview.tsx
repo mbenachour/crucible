@@ -13,7 +13,7 @@ function Tile({ k, v }: { k: string; v: React.ReactNode }) {
 const ROLE_LABELS: Record<string, string> = {
   recon: "Recon", hunter: "Hunter", validator_bug: "Validator (bug)", validator_reach: "Validator (reach)",
 };
-const FIELDS = ["provider", "model", "temperature", "base_url"] as const;
+const FIELDS = ["model", "temperature", "base_url"] as const;
 
 /** Compact per-role effective config + provenance (issue #77) — a field
  * sourced from this run's own override is tagged distinctly from one that
@@ -29,7 +29,6 @@ function ModelsPanel({ runId }: { runId: string }) {
           <thead>
             <tr>
               <th>role</th>
-              <th>provider</th>
               <th>model</th>
               <th>temp</th>
               <th>base url</th>

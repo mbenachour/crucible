@@ -38,9 +38,10 @@ class HealthOut(BaseModel):
 # --- config -------------------------------------------------------------
 
 class ModelSourceOut(BaseModel):
-    """Per-field provenance: ``"default"``, a config file name, or ``"env:VAR"``."""
+    """Per-field provenance: ``"default"``, a config file name, or ``"env:VAR"``.
+    No `provider` field — every role is OpenRouter (issue #80), so there's no
+    provenance to track for it."""
 
-    provider: str
     model: str
     temperature: str
     base_url: str
@@ -58,6 +59,21 @@ class ModelEndpointOut(BaseModel):
 
 class ConfigModelsOut(BaseModel):
     roles: dict[str, ModelEndpointOut]
+
+
+class CatalogModelOut(BaseModel):
+    """One entry in the curated OpenRouter model catalog (issue #80)."""
+
+    id: str
+    label: str
+    family: str
+
+
+class ConfigCatalogOut(BaseModel):
+    """The catalog grouped by family — what the Settings / New Run model
+    dropdowns render as `<optgroup>`s."""
+
+    families: dict[str, list[CatalogModelOut]]
 
 
 # --- runs / reports / metrics / coverage -----------------------------------

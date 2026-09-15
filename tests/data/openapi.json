@@ -29,6 +29,50 @@
         "title": "ArtifactMetaOut",
         "type": "object"
       },
+      "CatalogModelOut": {
+        "description": "One entry in the curated OpenRouter model catalog (issue #80).",
+        "properties": {
+          "family": {
+            "title": "Family",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "family"
+        ],
+        "title": "CatalogModelOut",
+        "type": "object"
+      },
+      "ConfigCatalogOut": {
+        "description": "The catalog grouped by family \u2014 what the Settings / New Run model\ndropdowns render as `<optgroup>`s.",
+        "properties": {
+          "families": {
+            "additionalProperties": {
+              "items": {
+                "$ref": "#/components/schemas/CatalogModelOut"
+              },
+              "type": "array"
+            },
+            "title": "Families",
+            "type": "object"
+          }
+        },
+        "required": [
+          "families"
+        ],
+        "title": "ConfigCatalogOut",
+        "type": "object"
+      },
       "ConfigModelsOut": {
         "properties": {
           "roles": {
@@ -458,7 +502,7 @@
         "type": "object"
       },
       "ModelSourceOut": {
-        "description": "Per-field provenance: ``\"default\"``, a config file name, or ``\"env:VAR\"``.",
+        "description": "Per-field provenance: ``\"default\"``, a config file name, or ``\"env:VAR\"``.\nNo `provider` field \u2014 every role is OpenRouter (issue #80), so there's no\nprovenance to track for it.",
         "properties": {
           "base_url": {
             "title": "Base Url",
@@ -468,17 +512,12 @@
             "title": "Model",
             "type": "string"
           },
-          "provider": {
-            "title": "Provider",
-            "type": "string"
-          },
           "temperature": {
             "title": "Temperature",
             "type": "string"
           }
         },
         "required": [
-          "provider",
           "model",
           "temperature",
           "base_url"
@@ -1046,6 +1085,27 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/config/catalog": {
+      "get": {
+        "operationId": "get_config_catalog_config_catalog_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigCatalogOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Config Catalog",
+        "tags": [
+          "config"
+        ]
+      }
+    },
     "/config/models": {
       "get": {
         "operationId": "get_config_models_config_models_get",
