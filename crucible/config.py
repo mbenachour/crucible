@@ -6,6 +6,12 @@ Resolution order (lowest to highest precedence):
      in the CWD; YAML wins where they overlap), or an explicit ``--config PATH``
      (format by suffix: ``.yaml`` / ``.yml`` -> YAML, else TOML)
   3. environment variables (see `ModelRegistry.from_env`)
+  4. a saved host-default override — the Settings tab, `PUT /config/models`
+     (issue #80); a live, deliberate admin choice outranks a static
+     deploy-time env var. Only applied when a `store` is passed to
+     `load_registry`/`load_registry_with_provenance`.
+  5. a per-run override (issue #77) — `POST /runs`'s ``models`` field, or the
+     New Run modal; the most specific, so it wins over everything else.
 
 **Secrets never come from the file** — the API key (``OPENROUTER_API_KEY``,
 ``LANGSMITH_API_KEY``) is read from the environment / a gitignored ``.env``
@@ -45,6 +51,7 @@ from typing import Any
 
 from crucible.llm.catalog import is_allowed
 from crucible.llm.registry import ModelEndpoint, ModelRegistry, ModelRole
+from crucible.store.dao import Store
 
 # Hunter (DeepSeek) != validator_bug (Qwen) lineage -> §6 assertion passes.
 # Override per role via config.yaml / env / a per-run override as usual.
@@ -143,26 +150,37 @@ def _apply_models(
 def load_registry(
     config_path: str | os.PathLike | None = None,
     run_override: dict[str, dict] | None = None,
+    *,
+    store: Store | None = None,
 ) -> ModelRegistry:
-    """DEFAULT_ENDPOINTS -> file config (yaml/toml) -> env overrides -> [run
-    override] -> registry."""
-    registry, _origins = load_registry_with_provenance(config_path, run_override)
+    """DEFAULT_ENDPOINTS -> file config (yaml/toml) -> env overrides -> [saved
+    host config] -> [run override] -> registry."""
+    registry, _origins = load_registry_with_provenance(config_path, run_override, store=store)
     return registry
 
 
 def load_registry_with_provenance(
     config_path: str | os.PathLike | None = None,
     run_override: dict[str, dict] | None = None,
+    *,
+    store: Store | None = None,
 ) -> tuple[ModelRegistry, dict[ModelRole, dict[str, str]]]:
     """Like `load_registry`, but also returns per-role, per-field provenance:
     ``{role: {"provider": "default" | "crucible.toml" | "config.yaml" | "env:VAR" |
-    "run override", ...}}``. Backs `GET /config/models` (issue #73) — "why is
-    hunter on deepseek?".
+    "settings" | "run override", ...}}``. Backs `GET /config/models` (issue
+    #73) — "why is hunter on deepseek?".
+
+    `store` (issue #80), when given, layers in any host-default override
+    saved via the Settings tab — above env vars, below `run_override`. Pass
+    the same `Store` the caller already has (the CLI's `--store-url`, the
+    API's `get_store`); omitting it just means "no Settings layer", not an
+    error, since not every caller (tests, `dump-openapi.py`) has a store.
 
     `run_override` (issue #77) is the highest-precedence layer — a per-run
-    partial-endpoint override, applied *after* env resolution — in the same
-    ``{role: {"provider"|"model"|"temperature"|"base_url": ...}}`` shape as a
-    config file's ``models:`` block. See `apply_model_override`.
+    partial-endpoint override, applied last — in the same ``{role:
+    {"model"|"temperature"|"base_url": ...}}`` shape as a config file's
+    ``models:`` block and as `store.get_host_model_config()`. See
+    `apply_model_override`.
     """
     endpoints = dict(DEFAULT_ENDPOINTS)
     origins: dict[ModelRole, dict[str, str]] = {
@@ -173,14 +191,23 @@ def load_registry_with_provenance(
             endpoints, _read_config_file(path).get("models"), origin=path.name, origins=origins
         )
     registry, origins = ModelRegistry.from_env_with_origins(defaults=endpoints, base_origins=origins)
+    if store is not None:
+        host_config = store.get_host_model_config()
+        if host_config:
+            env_endpoints = {role: registry.endpoint(role) for role in ModelRole}
+            merged, origins = apply_model_override(
+                env_endpoints, origins, host_config, origin_label=HOST_CONFIG_ORIGIN
+            )
+            registry = ModelRegistry.from_endpoints(merged)
     if run_override:
-        env_endpoints = {role: registry.endpoint(role) for role in ModelRole}
-        merged, origins = apply_model_override(env_endpoints, origins, run_override)
+        cur_endpoints = {role: registry.endpoint(role) for role in ModelRole}
+        merged, origins = apply_model_override(cur_endpoints, origins, run_override)
         registry = ModelRegistry.from_endpoints(merged)
     return registry, origins
 
 
 RUN_OVERRIDE_ORIGIN = "run override"
+HOST_CONFIG_ORIGIN = "settings"  # a saved host-default override (Settings tab, issue #80)
 
 
 class ModelOverrideError(ValueError):
@@ -194,9 +221,15 @@ def apply_model_override(
     endpoints: dict[ModelRole, ModelEndpoint],
     origins: dict[ModelRole, dict[str, str]],
     override: dict[str, dict] | None,
+    *,
+    origin_label: str = RUN_OVERRIDE_ORIGIN,
 ) -> tuple[dict[ModelRole, ModelEndpoint], dict[ModelRole, dict[str, str]]]:
-    """Layer a per-run model override (issue #77) on top of already-resolved
-    endpoints/origins — the highest-precedence layer, above env vars.
+    """Layer a partial-endpoint override on top of already-resolved
+    endpoints/origins. Used for two distinct layers that share this exact
+    validation and shape — a per-run override (issue #77, the highest
+    precedence, `origin_label` defaults to that) and a saved host-default
+    override (the Settings tab, issue #80, applied earlier — see
+    `load_registry_with_provenance` — with `origin_label=HOST_CONFIG_ORIGIN`).
 
     `override` is ``{role: {"model": ..., "temperature": ..., "base_url":
     ...}}`` with only the fields the caller wants to change; a field left out
@@ -279,7 +312,7 @@ def apply_model_override(
             ("base_url", base_url),
         ):
             if value is not None:
-                role_origin[field] = RUN_OVERRIDE_ORIGIN
+                role_origin[field] = origin_label
 
     # Reuse the registry's own construction assertion (specs.md §6) as the
     # single source of truth for "hunter and validator_bug must differ" —

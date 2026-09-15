@@ -283,3 +283,70 @@ def test_apply_model_override_accepts_a_valid_override_on_both_roles():
     # untouched role/fields are unaffected
     assert out[ModelRole.RECON].model == endpoints[ModelRole.RECON].model
     assert out_origins[ModelRole.RECON]["model"] == "default"
+
+
+# --- saved host-default model config (Settings tab, issue #80) -------------
+#
+# Applied as a layer above env vars and below a per-run override — see
+# `load_registry_with_provenance`'s docstring.
+
+def _store(tmp_path):
+    from crucible.store.dao import Store
+
+    return Store(f"sqlite:///{tmp_path}/f.sqlite")
+
+
+def test_no_store_is_a_noop_not_an_error(monkeypatch):
+    _clear_model_env(monkeypatch)
+    reg, origins = load_registry_with_provenance("/nonexistent/config.yaml")
+    assert reg.endpoint(ModelRole.HUNTER).model == "deepseek/deepseek-chat-v3.1"
+
+
+def test_empty_store_is_a_noop(tmp_path, monkeypatch):
+    _clear_model_env(monkeypatch)
+    reg, origins = load_registry_with_provenance("/nonexistent/config.yaml", store=_store(tmp_path))
+    assert reg.endpoint(ModelRole.HUNTER).model == "deepseek/deepseek-chat-v3.1"
+    assert origins[ModelRole.HUNTER]["model"] == "default"
+
+
+def test_saved_override_applies_with_settings_provenance(tmp_path, monkeypatch):
+    _clear_model_env(monkeypatch)
+    store = _store(tmp_path)
+    store.set_host_model_config("hunter", {"model": "deepseek/deepseek-r1-0528"})
+    reg, origins = load_registry_with_provenance("/nonexistent/config.yaml", store=store)
+    assert reg.endpoint(ModelRole.HUNTER).model == "deepseek/deepseek-r1-0528"
+    assert origins[ModelRole.HUNTER]["model"] == "settings"
+
+
+def test_saved_store_override_wins_over_env(tmp_path, monkeypatch):
+    """settings > env in precedence — a live Settings choice is a more
+    deliberate, more recent signal than a static deploy-time env var, so it
+    wins. (An emergency ops override still has the per-run override, or
+    clearing the saved value via Settings/DELETE, above it.)"""
+    store = _store(tmp_path)
+    store.set_host_model_config("hunter", {"model": "deepseek/deepseek-r1-0528"})
+    monkeypatch.setenv("CRUCIBLE_MODEL_HUNTER", "deepseek/deepseek-v4-pro")
+    reg, origins = load_registry_with_provenance("/nonexistent/config.yaml", store=store)
+    assert reg.endpoint(ModelRole.HUNTER).model == "deepseek/deepseek-r1-0528"
+    assert origins[ModelRole.HUNTER]["model"] == "settings"
+
+
+def test_run_override_still_wins_over_saved_store_override(tmp_path, monkeypatch):
+    _clear_model_env(monkeypatch)
+    store = _store(tmp_path)
+    store.set_host_model_config("hunter", {"model": "deepseek/deepseek-r1-0528"})
+    reg, origins = load_registry_with_provenance(
+        "/nonexistent/config.yaml", run_override={"hunter": {"model": "deepseek/deepseek-v4-pro"}},
+        store=store,
+    )
+    assert reg.endpoint(ModelRole.HUNTER).model == "deepseek/deepseek-v4-pro"
+    assert origins[ModelRole.HUNTER]["model"] == "run override"
+
+
+def test_saved_override_on_unrelated_role_leaves_others_at_default(tmp_path, monkeypatch):
+    _clear_model_env(monkeypatch)
+    store = _store(tmp_path)
+    store.set_host_model_config("hunter", {"model": "deepseek/deepseek-r1-0528"})
+    reg, origins = load_registry_with_provenance("/nonexistent/config.yaml", store=store)
+    assert origins[ModelRole.RECON]["model"] == "default"
+    assert origins[ModelRole.VALIDATOR_BUG]["model"] == "default"

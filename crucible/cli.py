@@ -93,8 +93,8 @@ def run(
     started = time.monotonic()
 
     run_override = json.loads(model_override) if model_override else None
-    registry = load_registry(config or None, run_override)
     store = Store(store_url)
+    registry = load_registry(config or None, run_override, store=store)
 
     sandbox_provider = None
     if not no_sandbox:

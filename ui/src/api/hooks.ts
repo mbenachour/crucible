@@ -7,6 +7,7 @@ import type {
   Finding,
   Health,
   Metrics,
+  ModelOverride,
   Page,
   Run,
   RunState,
@@ -72,6 +73,18 @@ export const useConfigCatalog = (enabled = true) =>
     enabled,
     staleTime: 5 * 60_000,
   });
+
+// PUT /config/models (issue #80): saves (or, with `null`, clears) a
+// host-default per-role override — what the Settings tab's dropdown writes
+// to. Takes effect for every run started from here on.
+export function useSetConfigModels() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (models: Record<string, ModelOverride | null>) =>
+      apiFetch<ConfigModels>("/config/models", { method: "PUT", body: { models } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["config-models"] }),
+  });
+}
 
 export const useMetrics = (runId: string) =>
   useQuery({

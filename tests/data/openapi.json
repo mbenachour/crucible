@@ -727,6 +727,31 @@
         "title": "RunOut",
         "type": "object"
       },
+      "SetHostModelsIn": {
+        "properties": {
+          "models": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": "role -> a partial endpoint override to save ({model?, temperature?, base_url?}), or null to clear that role's saved override. A role left out of the map keeps its current saved state.",
+            "title": "Models",
+            "type": "object"
+          }
+        },
+        "required": [
+          "models"
+        ],
+        "title": "SetHostModelsIn",
+        "type": "object"
+      },
       "Severity": {
         "enum": [
           "low",
@@ -1155,6 +1180,46 @@
           }
         },
         "summary": "Get Config Models",
+        "tags": [
+          "config"
+        ]
+      },
+      "put": {
+        "description": "Save (or clear) the host-default per-role model override \u2014 what the\nSettings tab's dropdown writes to. Takes effect for every run started\nfrom here on; a run already in flight keeps whatever it resolved at\nlaunch. Validated the same way as a per-run override (issue #77):\ncatalog membership, and the resulting config must still keep hunter and\nvalidator_bug on different models (specs.md \u00a76).",
+        "operationId": "set_config_models_config_models_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetHostModelsIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigModelsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Config Models",
         "tags": [
           "config"
         ]
