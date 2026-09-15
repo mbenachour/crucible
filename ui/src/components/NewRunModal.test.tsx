@@ -87,26 +87,44 @@ describe("NewRunModal", () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 
-  describe("models section (issue #77)", () => {
+  describe("models section (issue #77, catalog dropdown issue #80)", () => {
     const CONFIG_MODELS = {
       roles: {
         recon: {
-          provider: "ollama", model: "qwen2.5-coder:7b", temperature: 0.1,
-          base_url: "http://localhost:11434",
-          source: { provider: "default", model: "default", temperature: "default", base_url: "default" },
+          provider: "openrouter", model: "qwen/qwen-2.5-72b-instruct", temperature: 0.1,
+          base_url: "https://openrouter.ai/api/v1",
+          source: { model: "default", temperature: "default", base_url: "default" },
         },
         hunter: {
-          provider: "deepseek", model: "deepseek-v4-flash", temperature: 0.3,
-          base_url: "https://api.deepseek.com",
-          source: { provider: "default", model: "default", temperature: "default", base_url: "default" },
+          provider: "openrouter", model: "deepseek/deepseek-chat-v3.1", temperature: 0.3,
+          base_url: "https://openrouter.ai/api/v1",
+          source: { model: "default", temperature: "default", base_url: "default" },
         },
+      },
+    };
+    const CATALOG = {
+      families: {
+        deepseek: [
+          { id: "deepseek/deepseek-chat-v3.1", label: "DeepSeek Chat V3.1", family: "deepseek", size: "mid" },
+          { id: "deepseek/deepseek-r1-0528", label: "DeepSeek R1 (0528)", family: "deepseek", size: "big" },
+        ],
+        qwen: [
+          { id: "qwen/qwen-2.5-72b-instruct", label: "Qwen 2.5 72B Instruct", family: "qwen", size: "big" },
+        ],
+        glm: [
+          { id: "z-ai/glm-4.7-flash", label: "GLM 4.7 Flash", family: "glm", size: "small" },
+        ],
       },
     };
 
     function mockFetchDistinguishingConfigFromTrigger(onTrigger: (body: unknown) => void) {
       vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-        if (String(input).includes("/config/models")) {
+        const url = String(input);
+        if (url.includes("/config/models")) {
           return new Response(JSON.stringify(CONFIG_MODELS), { status: 200 });
+        }
+        if (url.includes("/config/catalog")) {
+          return new Response(JSON.stringify(CATALOG), { status: 200 });
         }
         onTrigger(init?.body ? JSON.parse(init.body as string) : null);
         return new Response(JSON.stringify({ run_id: "abc123", clone_status: "pending" }), { status: 202 });
@@ -120,12 +138,14 @@ describe("NewRunModal", () => {
       expect(fetchSpy).not.toHaveBeenCalled();
     });
 
-    it("prefills from GET /config/models once expanded", async () => {
+    it("prefills from GET /config/models once expanded, with no provider field anywhere", async () => {
       mockFetchDistinguishingConfigFromTrigger(() => {});
       renderModal();
       fireEvent.click(screen.getByText(/Models — use host config/));
-      expect(((await screen.findByLabelText("hunter model")) as HTMLInputElement).value).toBe("deepseek-v4-flash");
-      expect((screen.getByLabelText("recon provider") as HTMLInputElement).value).toBe("ollama");
+      expect(((await screen.findByLabelText("hunter model")) as HTMLSelectElement).value).toBe(
+        "deepseek/deepseek-chat-v3.1",
+      );
+      expect(screen.queryByLabelText("recon provider")).toBeNull();
     });
 
     it("submits an override only for the field actually edited", async () => {
@@ -136,11 +156,16 @@ describe("NewRunModal", () => {
       renderModal();
       fireEvent.change(screen.getByPlaceholderText(/owner\/repo/i), { target: { value: "octocat/Hello-World" } });
       fireEvent.click(screen.getByText(/Models — use host config/));
-      await screen.findByLabelText("hunter model");
-      fireEvent.change(screen.getByLabelText("hunter model"), { target: { value: "deepseek-chat" } });
+      const hunterSelect = await screen.findByLabelText<HTMLSelectElement>("hunter model");
+      // the catalog (GET /config/catalog) resolves async — wait for the target
+      // option to actually be in the DOM before selecting it
+      await waitFor(() =>
+        expect(hunterSelect.querySelector('option[value="deepseek/deepseek-r1-0528"]')).toBeTruthy(),
+      );
+      fireEvent.change(hunterSelect, { target: { value: "deepseek/deepseek-r1-0528" } });
       fireEvent.click(screen.getByText("Start run"));
       await waitFor(() => expect(posted).toHaveLength(1));
-      expect(posted[0].models).toEqual({ hunter: { model: "deepseek-chat" } });
+      expect(posted[0].models).toEqual({ hunter: { model: "deepseek/deepseek-r1-0528" } });
     });
 
     it("submits no override at all when the section is left untouched", async () => {

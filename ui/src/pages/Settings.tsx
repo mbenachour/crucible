@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { auth } from "../api/client";
-import { useConfigModels, useHealth } from "../api/hooks";
+import { auth, ApiError } from "../api/client";
+import { useConfigModels, useHealth, useSetConfigModels } from "../api/hooks";
+import { ModelSelect } from "../components/ModelSelect";
 import { Q } from "../components/states";
 import { useTheme } from "../lib/theme";
 import type { ModelEndpoint } from "../api/types";
@@ -14,16 +15,30 @@ const ROLE_LABEL: Record<string, string> = {
 };
 
 function ModelRow({ role, e }: { role: string; e: ModelEndpoint }) {
+  const set = useSetConfigModels();
   return (
     <tr>
       <td>{ROLE_LABEL[role] ?? role}</td>
-      <td className="mono">
-        {e.provider}
-        <div className="dim">{e.source.provider}</div>
-      </td>
-      <td className="mono">
-        {e.model}
-        <div className="dim">{e.source.model}</div>
+      <td>
+        {/* Same catalog dropdown as the New Run modal, grouped by family —
+            there's never a free-text model id to typo. No provider column:
+            every role is OpenRouter (issue #80), nothing to choose. Saves
+            immediately on change (the host default for every future run —
+            a run already in flight isn't affected). */}
+        <ModelSelect
+          ariaLabel={`${role} model`}
+          value={e.model}
+          onChange={(v) => set.mutate({ [role]: { model: v } })}
+          style={{ minWidth: 220 }}
+          disabled={set.isPending}
+        />
+        <div className="dim">
+          {set.isPending
+            ? "saving…"
+            : set.isError
+              ? (set.error as ApiError | undefined)?.detail || (set.error as Error)?.message
+              : e.source.model}
+        </div>
       </td>
       <td className="mono">
         {e.temperature}
@@ -113,6 +128,9 @@ export function Settings() {
 
       <section className="panel" style={{ maxWidth: 640 }}>
         <h3>Models</h3>
+        <div className="dim" style={{ marginBottom: 8 }}>
+          Every role runs on OpenRouter — one hosted key, any model, DeepSeek/Qwen/GLM only for now.
+        </div>
         <Q q={models} notFound={<div className="dim">unavailable — this API doesn't expose model config yet.</div>}>
           {(d) => (
             <div className="tbl-wrap">
@@ -120,7 +138,6 @@ export function Settings() {
                 <thead>
                   <tr>
                     <th>role</th>
-                    <th>provider</th>
                     <th>model</th>
                     <th>temp</th>
                   </tr>
@@ -135,7 +152,10 @@ export function Settings() {
           )}
         </Q>
         <div className="dim" style={{ marginTop: 8 }}>
-          Read-only for now — small text under each value shows where it came from (default / config.yaml / env var).
+          Changing a role here saves immediately and applies to every run started from now on — a
+          run already in progress keeps whatever it started with. Small text under each value shows
+          where it came from (default / config.yaml / env var / <b>settings</b>). To use a different
+          model for a single run instead, override it in the New Run modal.
         </div>
       </section>
     </div>

@@ -70,7 +70,7 @@ def trigger_run(
 
     model_override: dict[str, dict] | None = body.models or None
     if model_override:
-        registry, origins = load_registry_with_provenance()
+        registry, origins = load_registry_with_provenance(store=store)
         base_endpoints = {role: registry.endpoint(role) for role in ModelRole}
         try:
             apply_model_override(base_endpoints, origins, model_override)

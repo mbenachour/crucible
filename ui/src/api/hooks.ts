@@ -1,11 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "./client";
 import type {
+  ConfigCatalog,
   ConfigModels,
   Coverage,
   Finding,
   Health,
   Metrics,
+  ModelOverride,
   Page,
   Run,
   RunState,
@@ -60,6 +62,29 @@ export const useConfigModels = (runId?: string, enabled = true) =>
     enabled,
     retry: false,
   });
+
+// GET /config/catalog (issue #80): the curated OpenRouter model list, grouped
+// by family — what the model dropdowns render. Static-ish; a long staleTime
+// avoids refetching it on every modal open.
+export const useConfigCatalog = (enabled = true) =>
+  useQuery({
+    queryKey: ["config-catalog"],
+    queryFn: () => apiFetch<ConfigCatalog>("/config/catalog"),
+    enabled,
+    staleTime: 5 * 60_000,
+  });
+
+// PUT /config/models (issue #80): saves (or, with `null`, clears) a
+// host-default per-role override — what the Settings tab's dropdown writes
+// to. Takes effect for every run started from here on.
+export function useSetConfigModels() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (models: Record<string, ModelOverride | null>) =>
+      apiFetch<ConfigModels>("/config/models", { method: "PUT", body: { models } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["config-models"] }),
+  });
+}
 
 export const useMetrics = (runId: string) =>
   useQuery({

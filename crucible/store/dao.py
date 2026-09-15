@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from crucible.store.models import (
     Base,
     FindingRow,
+    HostModelConfigRow,
     Run,
     ToolUsageRow,
     ValidationRow,
@@ -151,6 +152,57 @@ class Store:
             r.repo_path = repo_path
             r.repo_commit = repo_commit
             r.workspace_path = workspace_path
+
+    # --- host-default model config (Settings tab, issue #80) -------------
+    #
+    # A saved per-role override that applies to every future run on this
+    # host, above env vars and below a per-run override — see
+    # `crucible.config.load_registry_with_provenance`.
+
+    def get_host_model_config(self) -> dict[str, dict]:
+        """`{role: {"model"?, "temperature"?, "base_url"?}}` — only roles
+        that have ever been saved appear; a field left unset on a saved row
+        is omitted, not `None` (matches the per-run override's partial-
+        endpoint shape, so both can go through `apply_model_override`)."""
+        with self.read_session() as s:
+            rows = s.execute(select(HostModelConfigRow)).scalars().all()
+            out: dict[str, dict] = {}
+            for r in rows:
+                partial: dict = {}
+                if r.model is not None:
+                    partial["model"] = r.model
+                if r.temperature is not None:
+                    partial["temperature"] = r.temperature
+                if r.base_url is not None:
+                    partial["base_url"] = r.base_url
+                if partial:
+                    out[r.role] = partial
+            return out
+
+    def set_host_model_config(self, role: str, partial: dict) -> None:
+        """Upsert a role's saved override. `partial` is the same
+        ``{"model"?, "temperature"?, "base_url"?}`` shape the API validates
+        via `apply_model_override` before ever calling this — this method
+        itself does no validation, it just persists."""
+        with self.session() as s:
+            row = s.get(HostModelConfigRow, role)
+            if row is None:
+                row = HostModelConfigRow(role=role)
+                s.add(row)
+            if "model" in partial:
+                row.model = partial["model"]
+            if "temperature" in partial:
+                row.temperature = partial["temperature"]
+            if "base_url" in partial:
+                row.base_url = partial["base_url"]
+
+    def clear_host_model_config(self, role: str) -> None:
+        """Remove a role's saved override entirely — it reverts to
+        config.yaml/env/DEFAULT_ENDPOINTS."""
+        with self.session() as s:
+            row = s.get(HostModelConfigRow, role)
+            if row is not None:
+                s.delete(row)
 
     def count_active_runs(self) -> int:
         """Runs with no `finished_at` — the concurrency-cap signal (issue #63)."""
