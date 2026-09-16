@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -106,6 +106,24 @@ class WishRow(Base):
     context: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String, default="open")  # open | resolved | requeued
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class HostModelConfigRow(Base):
+    """A saved host-default per-role model override (issue #80's Settings
+    tab), one row per role that has ever been set — a role with no row here
+    just falls through to config.yaml/env/DEFAULT_ENDPOINTS as before.
+    Applied by `crucible.config.load_registry_with_provenance` as a layer
+    above env vars and below a per-run override (issue #77) — the same
+    partial-endpoint shape and catalog validation as that per-run override,
+    just persisted instead of one-shot."""
+
+    __tablename__ = "host_model_config"
+
+    role: Mapped[str] = mapped_column(String, primary_key=True)
+    model: Mapped[str | None] = mapped_column(String, nullable=True)
+    temperature: Mapped[float | None] = mapped_column(Float, nullable=True)
+    base_url: Mapped[str | None] = mapped_column(String, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
 
 
 class ToolUsageRow(Base):

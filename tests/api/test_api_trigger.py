@@ -164,14 +164,14 @@ def test_run_without_override_has_empty_model_override(trigger_client, store):
 def test_model_override_accepted_and_passed_to_launch_run(trigger_client):
     body = {
         "repo": "octocat/Hello-World",
-        "models": {"hunter": {"provider": "deepseek", "model": "deepseek-chat"}},
+        "models": {"hunter": {"model": "deepseek/deepseek-r1-0528"}},
     }
     with patch("crucible.api.routers.trigger.launch_run", return_value="ov1") as launch:
         r = trigger_client.post("/runs", json=body)
     assert r.status_code == 202, r.text
     launch.assert_called_once()
     assert launch.call_args.kwargs["model_override"] == {
-        "hunter": {"provider": "deepseek", "model": "deepseek-chat"}
+        "hunter": {"model": "deepseek/deepseek-r1-0528"}
     }
 
 
@@ -198,24 +198,36 @@ def test_model_override_unknown_role_is_422_without_launching(trigger_client):
     launch.assert_not_called()
 
 
-def test_model_override_unresolvable_openrouter_model_is_422(trigger_client):
+def test_model_override_unresolvable_model_is_422(trigger_client):
+    with patch("crucible.api.routers.trigger.launch_run") as launch:
+        r = trigger_client.post("/runs", json={
+            "repo": "octocat/Hello-World",
+            "models": {"recon": {"model": "not-a-catalog-model"}},
+        })
+    assert r.status_code == 422
+    assert "catalog" in r.json()["detail"]
+    launch.assert_not_called()
+
+
+def test_model_override_rejects_provider_field(trigger_client):
+    """Issue #80: no provider choice — every role is OpenRouter."""
     with patch("crucible.api.routers.trigger.launch_run") as launch:
         r = trigger_client.post("/runs", json={
             "repo": "octocat/Hello-World",
             "models": {"recon": {"provider": "openrouter"}},
         })
     assert r.status_code == 422
-    assert "openrouter" in r.json()["detail"]
+    assert "unexpected field" in r.json()["detail"]
     launch.assert_not_called()
 
 
 def test_model_override_hunter_eq_validator_via_override_is_422(trigger_client):
-    """Host defaults already differ (deepseek vs ollama); the override alone
+    """Host defaults already differ (deepseek vs qwen); the override alone
     creates the collision — must still be rejected."""
     with patch("crucible.api.routers.trigger.launch_run") as launch:
         r = trigger_client.post("/runs", json={
             "repo": "octocat/Hello-World",
-            "models": {"validator_bug": {"provider": "deepseek", "model": "deepseek-v4-flash"}},
+            "models": {"validator_bug": {"model": "deepseek/deepseek-chat-v3.1"}},
         })
     assert r.status_code == 422
     assert "different models" in r.json()["detail"]
@@ -226,7 +238,7 @@ def test_model_override_hunter_eq_validator_via_override_on_hunter_is_422(trigge
     with patch("crucible.api.routers.trigger.launch_run") as launch:
         r = trigger_client.post("/runs", json={
             "repo": "octocat/Hello-World",
-            "models": {"hunter": {"provider": "ollama", "model": "llama3.1:8b"}},
+            "models": {"hunter": {"model": "qwen/qwen3-32b"}},
         })
     assert r.status_code == 422
     assert "different models" in r.json()["detail"]

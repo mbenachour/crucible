@@ -1,36 +1,31 @@
 # Crucible configuration — copy to `config.yaml` (gitignored) and edit.
 #
-# NON-SECRET config only. API keys stay in the environment / a gitignored `.env`:
-#   OPENROUTER_API_KEY, DEEPSEEK_API_KEY, LANGSMITH_API_KEY
+# NON-SECRET config only. The API key stays in the environment / a gitignored `.env`:
+#   OPENROUTER_API_KEY, LANGSMITH_API_KEY
 #
 # Precedence (low -> high): built-in defaults  <  crucible.toml  <  config.yaml
-#                           <  environment variables
+#                           <  environment variables  <  per-run override
 # `crucible run --config <path>` overrides auto-discovery (format by suffix).
 
 # --- Model matrix: one model per agent role --------------------------------
-# provider: ollama | deepseek | openrouter   (openai/vllm reserved, not wired)
-# An `openrouter` role MUST name its `model` — there is no default.
+# Every role is OpenRouter (issue #80) — no `provider` field. `model` must be
+# one of the curated ids in crucible/llm/catalog.py (DeepSeek/Qwen/GLM, for now;
+# also served over the API at GET /config/catalog).
 # Hunter and validator_bug models MUST differ (specs.md §6).
 models:
   recon:
-    provider: openrouter
-    model: qwen/qwen-2.5-coder-32b-instruct
+    model: qwen/qwen-2.5-72b-instruct
     temperature: 0.1
-    num_ctx: 16384
   hunter:
-    provider: openrouter
-    model: anthropic/claude-sonnet-4
+    model: deepseek/deepseek-chat-v3.1
     temperature: 0.3
   validator_bug:
-    provider: openrouter
-    model: openai/gpt-4o
+    model: qwen/qwen3-32b
     temperature: 0.1
   validator_reach:
-    provider: openrouter
-    model: google/gemini-2.0-flash
+    model: deepseek/deepseek-r1-0528
     temperature: 0.1
-  # base_url: optional; omit to use the provider default
-  #   (openrouter -> https://openrouter.ai/api/v1, ollama -> localhost:11434)
+  # base_url: optional; omit to use https://openrouter.ai/api/v1
 
 # --- Tracing toggles (specs.md §13) ---------------------------------------
 # Enables spans; the API key itself is still read from the environment.

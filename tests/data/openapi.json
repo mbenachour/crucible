@@ -29,6 +29,55 @@
         "title": "ArtifactMetaOut",
         "type": "object"
       },
+      "CatalogModelOut": {
+        "description": "One entry in the curated OpenRouter model catalog (issue #80).",
+        "properties": {
+          "family": {
+            "title": "Family",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "size": {
+            "title": "Size",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "family",
+          "size"
+        ],
+        "title": "CatalogModelOut",
+        "type": "object"
+      },
+      "ConfigCatalogOut": {
+        "description": "The catalog grouped by family \u2014 what the Settings / New Run model\ndropdowns render as `<optgroup>`s.",
+        "properties": {
+          "families": {
+            "additionalProperties": {
+              "items": {
+                "$ref": "#/components/schemas/CatalogModelOut"
+              },
+              "type": "array"
+            },
+            "title": "Families",
+            "type": "object"
+          }
+        },
+        "required": [
+          "families"
+        ],
+        "title": "ConfigCatalogOut",
+        "type": "object"
+      },
       "ConfigModelsOut": {
         "properties": {
           "roles": {
@@ -458,7 +507,7 @@
         "type": "object"
       },
       "ModelSourceOut": {
-        "description": "Per-field provenance: ``\"default\"``, a config file name, or ``\"env:VAR\"``.",
+        "description": "Per-field provenance: ``\"default\"``, a config file name, or ``\"env:VAR\"``.\nNo `provider` field \u2014 every role is OpenRouter (issue #80), so there's no\nprovenance to track for it.",
         "properties": {
           "base_url": {
             "title": "Base Url",
@@ -468,17 +517,12 @@
             "title": "Model",
             "type": "string"
           },
-          "provider": {
-            "title": "Provider",
-            "type": "string"
-          },
           "temperature": {
             "title": "Temperature",
             "type": "string"
           }
         },
         "required": [
-          "provider",
           "model",
           "temperature",
           "base_url"
@@ -681,6 +725,31 @@
           "outcome"
         ],
         "title": "RunOut",
+        "type": "object"
+      },
+      "SetHostModelsIn": {
+        "properties": {
+          "models": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": "role -> a partial endpoint override to save ({model?, temperature?, base_url?}), or null to clear that role's saved override. A role left out of the map keeps its current saved state.",
+            "title": "Models",
+            "type": "object"
+          }
+        },
+        "required": [
+          "models"
+        ],
+        "title": "SetHostModelsIn",
         "type": "object"
       },
       "Severity": {
@@ -1046,6 +1115,27 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/config/catalog": {
+      "get": {
+        "operationId": "get_config_catalog_config_catalog_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigCatalogOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Config Catalog",
+        "tags": [
+          "config"
+        ]
+      }
+    },
     "/config/models": {
       "get": {
         "operationId": "get_config_models_config_models_get",
@@ -1090,6 +1180,46 @@
           }
         },
         "summary": "Get Config Models",
+        "tags": [
+          "config"
+        ]
+      },
+      "put": {
+        "description": "Save (or clear) the host-default per-role model override \u2014 what the\nSettings tab's dropdown writes to. Takes effect for every run started\nfrom here on; a run already in flight keeps whatever it resolved at\nlaunch. Validated the same way as a per-run override (issue #77):\ncatalog membership, and the resulting config must still keep hunter and\nvalidator_bug on different models (specs.md \u00a76).",
+        "operationId": "set_config_models_config_models_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetHostModelsIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigModelsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Config Models",
         "tags": [
           "config"
         ]

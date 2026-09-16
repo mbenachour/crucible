@@ -48,8 +48,8 @@ The three pieces of work it grew out of:
 
 Crucible is a learning-and-research build, not a product. It uses **LangGraph**
 for a durable, checkpointed stage machine and **LangChain** agents for each
-stage, and routes every agent role to a model of your choice — local Ollama,
-DeepSeek, or anything on OpenRouter. The full design rationale is in
+stage, and routes every agent role to a model of your choice on **OpenRouter**
+— one hosted key, any model. The full design rationale is in
 [`specs.md`](specs.md); [`architecture.md`](architecture.md) documents every
 component.
 
@@ -203,7 +203,7 @@ outlive and be queryable independently of any run.
   group (`sudo usermod -aG docker "$USER"`, then re-login), or prefix commands
   with `sg docker -c '…'` for the current session. First run pulls
   `python:3.12-slim-bookworm`.
-- An LLM provider — local **Ollama** (default) or **DeepSeek** (hosted)
+- An [OpenRouter](https://openrouter.ai) API key (the only LLM provider Crucible talks to)
 
 ### Install (development)
 
@@ -215,48 +215,41 @@ crucible --help
 
 ### Models
 
-Provider-configurable via `crucible/llm/registry.py`. Wired providers: `ollama`
-(local, default), `deepseek` (hosted, OpenAI-compatible) and `openrouter` (one
-key, any hosted model — the model matrix). Defaults use Ollama with **different
-lineages** for hunter vs validator (the §6 assertion):
-
-```bash
-ollama serve
-ollama pull qwen2.5-coder:7b     # recon + hunter
-ollama pull llama3.1:8b          # validators
-```
+OpenRouter only (`crucible/llm/registry.py`) — one hosted key, any model. Which
+model each role uses is picked from the curated catalog in
+`crucible/llm/catalog.py` (DeepSeek/Qwen/GLM, for now — see issue #80). Defaults
+draw hunter and validator_bug from **different lineages** (the §6 assertion).
 
 Override per role, highest precedence last: `crucible/config.py` defaults →
-`crucible.toml` → `config.yaml` → env vars.
+`crucible.toml` → `config.yaml` → env vars → a per-run override (the Settings
+tab, or `POST /runs`'s `models` field).
 
 **`config.yaml`** (recommended — `cp config.yaml.example config.yaml`, gitignored)
-carries the whole model matrix plus tracing toggles. Non-secret only; API keys
-stay in `.env`.
+carries the whole model matrix plus tracing toggles. Non-secret only; the API
+key stays in `.env`.
 
 ```yaml
-# config.yaml — one model per role, all on OpenRouter
+# config.yaml — one model per role
 models:
-  recon:          { provider: openrouter, model: qwen/qwen-2.5-coder-32b-instruct }
-  hunter:         { provider: openrouter, model: anthropic/claude-sonnet-4 }
-  validator_bug:  { provider: openrouter, model: openai/gpt-4o }          # != hunter (§6)
-  validator_reach:{ provider: openrouter, model: google/gemini-2.0-flash }
+  recon:          { model: qwen/qwen-2.5-72b-instruct }
+  hunter:         { model: deepseek/deepseek-chat-v3.1 }
+  validator_bug:  { model: qwen/qwen3-32b }   # != hunter (§6)
+  validator_reach:{ model: deepseek/deepseek-r1-0528 }
 tracing:
   langsmith: { enabled: true, project: crucible }   # LANGSMITH_API_KEY from .env
 ```
 
-A role routed to `openrouter` MUST name its `model` — there is no silent default.
-`crucible.toml` (`[models.hunter] provider = "..."`) still works; `config.yaml`
+`crucible.toml` (`[models.hunter] model = "..."`) still works; `config.yaml`
 wins where both set the same value.
 
 ```bash
 # every value is also settable by env, which overrides the file.
-export RECON_LLM=openrouter                  # ollama | deepseek | openrouter | openai (openai reserved)
-export CRUCIBLE_MODEL_RECON=qwen/qwen-2.5-coder-32b-instruct
+export CRUCIBLE_MODEL_RECON=qwen/qwen-2.5-72b-instruct
 ```
 
 Secrets: `cp .env.example .env` and fill it in. `.env` is at the repo root
 (gitignored; loaded automatically by `crucible run` / `status`) —
-`OPENROUTER_API_KEY=sk-or-...`, `DEEPSEEK_API_KEY=sk-...`, `LANGSMITH_API_KEY=...`.
+`OPENROUTER_API_KEY=sk-or-...`, `LANGSMITH_API_KEY=...`.
 
 ### Run
 
@@ -286,8 +279,8 @@ Gapfill → Feedback → `loop_control`) runs continuously, bounded by
 `CRUCIBLE_MAX_CYCLES`. Validate (bug/reach) and Report are still stubs, so a run
 drains the loop and then exits at `stopped at stub node: validate_bug` (code 3),
 having written `coverage/`, `dedup/clusters.json`, any `findings/`, and
-checkpoints. Hunt needs a reachable Hunter model — set `HUNTER_LLM=deepseek` (or
-pull the Ollama default) alongside `RECON_LLM`.
+checkpoints. Hunt needs a reachable Hunter model — set `OPENROUTER_API_KEY`
+and (optionally) `CRUCIBLE_MODEL_HUNTER`.
 
 ### Logs & tracing
 
