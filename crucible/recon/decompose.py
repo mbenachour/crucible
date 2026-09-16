@@ -9,6 +9,7 @@ Also renders `architecture.md` from the seed + R1 contributions.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from crucible.recon.schema import (
     AttackSurfaceItem,
@@ -471,7 +472,12 @@ def render_architecture(
 ) -> str:
     subsystem_maps = subsystem_maps or []
     L: list[str] = []
-    L.append(f"# Architecture — {seed.repo_path}")
+    # The repo's basename only — never the full local checkout path. Recon
+    # runs against a temp/workspace clone, so the absolute path would leak
+    # the host's username and internal directory layout (issue #89) into a
+    # document meant to be shared/read by a team, not just the operator who
+    # ran it.
+    L.append(f"# Architecture — {Path(seed.repo_path).name}")
     L.append("")
     if quality is not None and quality != "full":
         L.append(_QUALITY_BANNER.get(quality, _QUALITY_BANNER["partial"]))

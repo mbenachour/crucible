@@ -76,6 +76,21 @@ export function baseName(p: string): string {
   return p.split("/").filter(Boolean).pop() || p;
 }
 
+/** A run's human-recognizable identity (issue #84) — prefer `source_spec`
+ * (what the user actually typed: "owner/repo" or a git URL) over
+ * `baseName(repo_path)`, which for most clones is just the literal string
+ * "repo" (the checkout directory name) and tells you nothing. A git URL
+ * source_spec is shortened to "owner/repo" to match the other form; only a
+ * CLI-triggered run with no source_spec at all falls back to the clone path. */
+export function repoLabel(r: { repo_path: string; source_spec?: string }): string {
+  const spec = (r.source_spec || "").trim();
+  if (spec) {
+    const m = spec.match(/[:/]([\w.-]+\/[\w.-]+?)(\.git)?\/?$/);
+    return m ? m[1] : spec;
+  }
+  return baseName(r.repo_path);
+}
+
 /** attack class recovered from `provenance.hunter_prompt_version` ("<class>@<ver>") */
 export function attackClass(f: { provenance?: Record<string, unknown> }): string {
   const pv = String(f.provenance?.["hunter_prompt_version"] ?? "");

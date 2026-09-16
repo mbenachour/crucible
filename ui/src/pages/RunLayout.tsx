@@ -2,7 +2,7 @@ import { Link, NavLink, Outlet, useParams } from "react-router-dom";
 import { useRun } from "../api/hooks";
 import { Q } from "../components/states";
 import { OutcomeTag, Time } from "../components/bits";
-import { baseName, shortCommit } from "../lib/format";
+import { repoLabel, shortCommit } from "../lib/format";
 import { useNewRunModal } from "../lib/newRunModal";
 import type { Run } from "../api/types";
 
@@ -28,7 +28,7 @@ export function RunLayout() {
         <>
           <div className="row" style={{ justifyContent: "space-between" }}>
             <h1 style={{ marginBottom: 0 }}>
-              {baseName(r.repo_path)} <span className="mono dim" style={{ fontSize: 13 }}>{shortCommit(r.repo_commit)}</span>
+              {repoLabel(r)} <span className="mono dim" style={{ fontSize: 13 }}>{shortCommit(r.repo_commit)}</span>
             </h1>
             <div className="row">
               <OutcomeTag v={r.outcome} />
@@ -54,7 +54,6 @@ export function RunLayout() {
                 to={t.to ? `/runs/${runId}/${t.to}` : `/runs/${runId}`}
                 end={t.end}
                 className={({ isActive }) => (isActive ? "active" : "")}
-                style={{ padding: "4px 8px", borderRadius: 6 }}
               >
                 {t.label}
               </NavLink>

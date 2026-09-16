@@ -47,7 +47,7 @@ export function RunStatePage() {
               <table>
                 <thead>
                   <tr>
-                    <th>task</th><th>area</th><th>attack class</th><th>chunk</th><th>seed path</th><th className="wrap">scope hint</th>
+                    <th>task</th><th>area</th><th>attack class</th><th>chunk</th><th>seed path</th><th>scope hint</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -58,7 +58,9 @@ export function RunStatePage() {
                       <td className="mono">{t.attack_class}</td>
                       <td>{t.chunk_type}</td>
                       <td className="mono dim">{t.seed_path || "—"}</td>
-                      <td className="wrap dim">{t.scope_hint}</td>
+                      <td className="dim" title={t.scope_hint}>
+                        <div className="truncate">{t.scope_hint}</div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

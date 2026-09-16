@@ -2,7 +2,7 @@ import { useNavigate } from "react-router-dom";
 import { useRuns } from "../api/hooks";
 import { Q } from "../components/states";
 import { Pager, StatusOrLaunchTag, Time } from "../components/bits";
-import { baseName, shortCommit } from "../lib/format";
+import { repoLabel, shortCommit } from "../lib/format";
 import { useNewRunModal } from "../lib/newRunModal";
 import { useUrlState } from "../lib/useUrlState";
 
@@ -74,9 +74,7 @@ export function Runs() {
                   <tbody>
                     {d.items.map((r) => (
                       <tr key={r.run_id} className="rowlink" onClick={() => nav(`/runs/${r.run_id}`)}>
-                        <td title={r.repo_path || r.source_spec}>
-                          {baseName(r.repo_path) || r.source_spec || "—"}
-                        </td>
+                        <td title={r.repo_path || r.source_spec}>{repoLabel(r) || "—"}</td>
                         <td className="mono dim">{r.repo_commit ? shortCommit(r.repo_commit) : "—"}</td>
                         <td>{r.primary_language || "—"}</td>
                         <td>

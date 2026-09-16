@@ -25,6 +25,9 @@ export function Wishlist() {
           </button>
         ))}
       </div>
+      <div className="dim" style={{ marginBottom: 10 }}>
+        Resolving a wish doesn't re-run its task — resume the run (<code className="mono">crucible run --resume &lt;run_id&gt;</code>) to pick it back up.
+      </div>
       <Q q={q}>
         {(d) =>
           d.items.length === 0 ? (
@@ -92,8 +95,8 @@ function WishCard({ w }: { w: Wish }) {
         </div>
       )}
       {forbidden && <div className="dim" style={{ marginTop: 6, color: "var(--bad-fg)" }}>needs a write token — set one in the top bar</div>}
-      <div className="dim" style={{ marginTop: 6 }}>
-        Resolving does not re-run the task — do that with <code>crucible run --resume {w.run_id}</code>.
+      <div className="dim mono" style={{ marginTop: 6, fontSize: 12 }}>
+        crucible run --resume {w.run_id}
       </div>
     </div>
   );
