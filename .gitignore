@@ -18,6 +18,7 @@ findings.sqlite*
 .ruff_cache/
 .claude/settings.local.json
 .DS_Store
+models.csv
 *.o
 *.a
 *.egg-info/
