@@ -26,6 +26,8 @@ from __future__ import annotations
 import logging
 import sqlite3
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -64,6 +66,74 @@ STAGE_NODES = (
     "validate_reachability",
     "report",
 )
+
+
+# Stages whose outgoing edge is conditional (a gate function picks the next
+# node), so there is no single static edge to splice a new stage into.
+_CONDITIONAL_STAGES = ("hunt", "loop_control")
+
+
+@dataclass(frozen=True)
+class NodeSpec:
+    """An extra stage to splice into the graph — the open-core extension seam.
+
+    A downstream distribution (see `crucible.ext`) adds stages the OSS pipeline
+    doesn't have (cross-repo tracing, a fixer, …) without forking `build_graph`
+    and without touching the stages it already has:
+
+        build_graph(deps, extra_nodes=[
+            NodeSpec("tracer", tracer.run, after="validate_reachability"),
+            NodeSpec("fixer",  fixer.run,  after="report"),
+        ])
+
+    `after` names the stage this one runs after; the static edge leaving that
+    stage is rewired through the new node (``after -> name -> old_successor``),
+    so the rest of the topology is untouched. Several specs may share an
+    `after` — they chain in the order given. Extra stages get the same
+    `_traced` treatment as built-in ones (logging, spans, `stop_after`).
+
+    `run` has the node signature: ``run(state, deps=...) -> state``.
+    """
+
+    name: str
+    run: Callable[..., CrucibleState]
+    after: str
+
+
+def _splice(edges: list[tuple[str, str]], specs: tuple[NodeSpec, ...]) -> list[tuple[str, str]]:
+    """Rewire `edges` so each spec runs directly after the stage it names.
+
+    Raises `ValueError` rather than silently producing a graph the caller
+    didn't ask for — a mis-wired pipeline is the kind of thing that would
+    otherwise only show up as a stage mysteriously never running.
+    """
+    out = list(edges)
+    known = {src for src, _ in out} | {dst for _, dst in out}
+    # The last node spliced after a given stage, so repeated `after` values
+    # chain in declaration order instead of stacking up in reverse.
+    tail = {}
+    for spec in specs:
+        if spec.name in known:
+            raise ValueError(f"extra node {spec.name!r} collides with an existing stage")
+        if spec.after in _CONDITIONAL_STAGES:
+            raise ValueError(
+                f"cannot splice {spec.name!r} after {spec.after!r}: that stage's outgoing "
+                f"edge is conditional. Splice after one of the stages it branches to instead."
+            )
+        src = tail.get(spec.after, spec.after)
+        for i, (edge_src, edge_dst) in enumerate(out):
+            if edge_src == src:
+                out[i] = (edge_src, spec.name)
+                out.insert(i + 1, (spec.name, edge_dst))
+                break
+        else:
+            raise ValueError(
+                f"cannot splice {spec.name!r} after unknown stage {spec.after!r}; "
+                f"expected one of {sorted(known - {START, END})}"
+            )
+        known.add(spec.name)
+        tail[spec.after] = spec.name
+    return out
 
 
 class StopAfterStage(Exception):
@@ -107,27 +177,58 @@ def build_graph(
     deps: NodeDeps,
     checkpoint_db: str | Path = "checkpoints.sqlite",
     stop_after: str | None = None,
+    extra_nodes: tuple[NodeSpec, ...] | list[NodeSpec] = (),
 ):
     """Assemble the Phase 1 graph and bind the SQLite checkpointer + deps.
 
-    ``stop_after`` (one of :data:`STAGE_NODES`) makes the run halt cleanly once
-    that node has completed; ``None`` keeps the full end-to-end semantics.
+    ``stop_after`` (one of :data:`STAGE_NODES`, or an extra node's name) makes
+    the run halt cleanly once that node has completed; ``None`` keeps the full
+    end-to-end semantics.
+
+    ``extra_nodes`` splices additional stages in (see :class:`NodeSpec`). The
+    ten built-in stages are always present and always run their own
+    implementations — an extra node can be added between them but cannot
+    replace one. That is deliberate: it is the seam a downstream distribution
+    extends through, and keeping it additive is what stops the two from
+    drifting into forks of each other.
     """
     g = StateGraph(CrucibleState)
 
-    g.add_node("recon", _traced("recon", recon.run, deps, stop_after))
-    g.add_node("hunt", _traced("hunt", hunt.run, deps, stop_after))
-    g.add_node("dedup", _traced("dedup", dedup.run, deps, stop_after))
-    g.add_node("validate_mechanical", _traced("validate_mechanical", validate_mechanical.run, deps, stop_after))
-    g.add_node("gapfill", _traced("gapfill", gapfill.run, deps, stop_after))
-    g.add_node("feedback", _traced("feedback", feedback.run, deps, stop_after))
-    g.add_node("loop_control", _traced("loop_control", loop_control.run, deps, stop_after))
-    g.add_node("validate_bug", _traced("validate_bug", validate_bug.run, deps, stop_after))
-    g.add_node("validate_reachability", _traced("validate_reachability", validate_reachability.run, deps, stop_after))
-    g.add_node("report", _traced("report", report.run, deps, stop_after))
+    builtin = {
+        "recon": recon.run,
+        "hunt": hunt.run,
+        "dedup": dedup.run,
+        "validate_mechanical": validate_mechanical.run,
+        "gapfill": gapfill.run,
+        "feedback": feedback.run,
+        "loop_control": loop_control.run,
+        "validate_bug": validate_bug.run,
+        "validate_reachability": validate_reachability.run,
+        "report": report.run,
+    }
+    for name, fn in builtin.items():
+        g.add_node(name, _traced(name, fn, deps, stop_after))
+    for spec in extra_nodes:
+        g.add_node(spec.name, _traced(spec.name, spec.run, deps, stop_after))
 
-    g.add_edge(START, "recon")
-    g.add_edge("recon", "hunt")
+    # Static edges, as data so `extra_nodes` can be spliced into them. The two
+    # conditional edges below are not splice targets (see `_CONDITIONAL_STAGES`).
+    edges = [
+        (START, "recon"),
+        ("recon", "hunt"),
+        # Phase 2 producer-consumer loop (§11, issue #22): hunt output -> dedup
+        # -> validate -> gapfill/feedback re-queue -> back to hunt, bounded by
+        # MAX_CYCLES.
+        ("dedup", "validate_mechanical"),
+        ("validate_mechanical", "gapfill"),
+        ("gapfill", "feedback"),
+        ("feedback", "loop_control"),
+        ("validate_bug", "validate_reachability"),
+        ("validate_reachability", "report"),
+        ("report", END),
+    ]
+    for src, dst in _splice(edges, tuple(extra_nodes)):
+        g.add_edge(src, dst)
 
     # Bounded continuation (§8): re-enter Hunt in a fresh context window until the
     # completion goal is met or the hard cap (3) is hit. State carries via the
@@ -137,22 +238,11 @@ def build_graph(
         continuation_gate,
         {"continue": "hunt", "done": "dedup"},
     )
-
-    # Phase 2 producer-consumer loop (§11, issue #22): hunt output -> dedup ->
-    # validate -> gapfill/feedback re-queue -> back to hunt, bounded by MAX_CYCLES.
-    g.add_edge("dedup", "validate_mechanical")
-    g.add_edge("validate_mechanical", "gapfill")
-    g.add_edge("gapfill", "feedback")
-    g.add_edge("feedback", "loop_control")
     g.add_conditional_edges(
         "loop_control",
         loop_gate,
         {"rehunt": "hunt", "proceed": "validate_bug"},
     )
-
-    g.add_edge("validate_bug", "validate_reachability")
-    g.add_edge("validate_reachability", "report")
-    g.add_edge("report", END)
 
     conn = sqlite3.connect(str(checkpoint_db), check_same_thread=False)
     checkpointer = SqliteSaver(conn)
