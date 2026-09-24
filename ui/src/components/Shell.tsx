@@ -16,6 +16,20 @@ function HealthDot() {
   return <span title={title} style={{ width: 9, height: 9, borderRadius: 9, background: color, display: "inline-block", flex: "none" }} />;
 }
 
+function SandboxBanner() {
+  const h = useHealth();
+  // Undefined while loading / on a fetch error — only warn once health has
+  // actually answered "not ok", so this never flashes on a slow first load.
+  if (!h.data || h.data.sandbox_ok) return null;
+  return (
+    <div className="banner bad">
+      <span className="dim">⚠</span> Sandbox unavailable — new runs will fail immediately
+      (docker sandbox is required unless a run is started with --no-sandbox).{" "}
+      {h.data.sandbox_detail && <code className="mono">{h.data.sandbox_detail}</code>}
+    </div>
+  );
+}
+
 const navLinkClass = ({ isActive }: { isActive: boolean }) => (isActive ? "active" : "");
 
 export function Shell() {
@@ -78,6 +92,7 @@ export function Shell() {
             </NavLink>
           </nav>
           <div className="content">
+            <SandboxBanner />
             <Outlet />
           </div>
         </div>

@@ -21,14 +21,31 @@ def get_store(request: Request) -> Store:
 
 
 def get_workspace(run_id: str, request: Request) -> Path:
-    """Resolve a run's workspace dir (issue #38). Falls back to workspace_root."""
+    """Resolve a run's workspace dir (issue #38).
+
+    `run.workspace_path` is only recorded once the spawned `crucible run`
+    process gets far enough to call `create_run`/`set_repo_info` (see
+    `cli.py`) — a run whose process crashed before that point (e.g. during
+    clone or model-registry setup) leaves it blank forever. For those, prefer
+    the deterministic per-run directory `launcher.py` already created at
+    launch (`<runs_dir>/<run_id>/workspace`) over the shared `workspace_root`
+    fallback: the latter is a *global* directory reused across runs, so
+    serving it for an unrelated run silently shows a stranger's logs/artifacts
+    instead of this run's (near-empty, but its own) state. Only truly old runs
+    predating per-run directories (`workspace_path` blank and no per-run dir
+    on disk) fall through to `workspace_root`.
+    """
     store: Store = request.app.state.store
     settings: ApiSettings = request.app.state.settings
     run = store.get_run(run_id)
     if run is None:
         raise ApiError(404, "run not found", run_id)
-    ws = Path(run.workspace_path) if run.workspace_path else Path(settings.workspace_root)
-    return ws
+    if run.workspace_path:
+        return Path(run.workspace_path)
+    per_run = Path(settings.runs_dir) / run_id / "workspace"
+    if per_run.is_dir():
+        return per_run
+    return Path(settings.workspace_root)
 
 
 def _token(request: Request) -> str:
