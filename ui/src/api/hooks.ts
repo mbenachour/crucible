@@ -23,7 +23,15 @@ type Q = Record<string, string | number | boolean | undefined | (string | number
 const LAUNCHING = new Set(["pending", "cloning"]);
 
 export const useHealth = () =>
-  useQuery({ queryKey: ["health"], queryFn: () => apiFetch<Health>("/health"), retry: false });
+  useQuery({
+    queryKey: ["health"],
+    queryFn: () => apiFetch<Health>("/health"),
+    retry: false,
+    // Poll while something's actually wrong (e.g. sandbox down, so the
+    // banner clears itself once Docker comes back) — otherwise a one-shot
+    // check on mount/refocus is enough.
+    refetchInterval: (q) => (q.state.data && !q.state.data.sandbox_ok ? 10000 : false),
+  });
 
 export const useRuns = (query: Q) =>
   useQuery({
@@ -50,6 +58,17 @@ export function useTriggerRun() {
   return useMutation({
     mutationFn: (body: TriggerRunIn) => apiFetch<TriggerRunOut>("/runs", { method: "POST", body }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["runs"] }),
+  });
+}
+
+export function useCancelRun() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (runId: string) => apiFetch<Run>(`/runs/${runId}/cancel`, { method: "POST" }),
+    onSuccess: (run) => {
+      qc.invalidateQueries({ queryKey: ["run", run.run_id] });
+      qc.invalidateQueries({ queryKey: ["runs"] });
+    },
   });
 }
 

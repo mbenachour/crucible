@@ -6,7 +6,7 @@ import { auth } from "../api/client";
 import { Settings } from "./Settings";
 import type { ConfigCatalog, ConfigModels, Health } from "../api/types";
 
-const HEALTH: Health = { status: "ok", version: "0.9.0", store_ok: true };
+const HEALTH: Health = { status: "ok", version: "0.9.0", store_ok: true, sandbox_ok: true, sandbox_detail: "" };
 
 const CATALOG: ConfigCatalog = {
   families: {

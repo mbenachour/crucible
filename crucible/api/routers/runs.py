@@ -9,8 +9,9 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import PlainTextResponse
 
-from crucible.api.deps import get_store, get_workspace, require_read
+from crucible.api.deps import get_store, get_workspace, require_read, require_write
 from crucible.api.errors import ApiError
+from crucible.api.launcher import CancelError, cancel_run
 from crucible.api.mappers import run_out
 from crucible.api.schemas import (
     CoverageCellOut,
@@ -61,6 +62,20 @@ def get_run(run_id: str, store: Store = Depends(get_store)) -> RunOut:
     run = _load_run(store, run_id)
     out = run_out(run, store.run_counts(run_id))
     return out
+
+
+@router.post("/{run_id}/cancel", response_model=RunOut, dependencies=[Depends(require_write)])
+def cancel(run_id: str, store: Store = Depends(get_store)) -> RunOut:
+    """Kill an in-progress, API-launched run (SIGTERM, then SIGKILL after a
+    grace period if it hasn't exited) and mark it `outcome="cancelled"`. 409s
+    for a run with nothing to kill — already finished, or started outside the
+    API (no pid recorded) — see `launcher.cancel_run`."""
+    _load_run(store, run_id)  # 404 (not 409) for an unknown run_id
+    try:
+        cancel_run(store, run_id)
+    except CancelError as e:
+        raise ApiError(409, "cannot cancel run", str(e)) from e
+    return run_out(_load_run(store, run_id), store.run_counts(run_id))
 
 
 def _report_path(run, ws: Path) -> Path:

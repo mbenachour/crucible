@@ -64,6 +64,7 @@ export function outcomeClass(outcome: string): string {
     stopped_at_stub: "warn",
     stopped_after_stage: "warn",
     failed: "bad",
+    cancelled: "neutral",
   };
   return `tag tag-${map[outcome] ?? "neutral"}`;
 }

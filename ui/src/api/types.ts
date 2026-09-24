@@ -17,6 +17,8 @@ export interface Health {
   status: string;
   version: string;
   store_ok: boolean;
+  sandbox_ok: boolean;
+  sandbox_detail: string;
 }
 
 // --- config/models (issue #73) ---------------------------------------------
@@ -59,6 +61,7 @@ export type Outcome =
   | "stopped_at_stub"
   | "stopped_after_stage"
   | "failed"
+  | "cancelled"
   | "";
 
 export type CloneStatus = "" | "pending" | "cloning" | "cloned" | "clone_failed";
