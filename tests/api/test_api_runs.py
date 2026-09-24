@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from tests.api.conftest import RUN_A, RUN_B
 
 
@@ -76,3 +78,39 @@ def test_coverage_matrix_and_buckets(client):
     assert set(j["gapfill_buckets"]["missing"]) == {"api::path_traversal", "core::auth_bypass"}
     # A-med (path_traversal) failed mechanical for an actionable reason -> failed bucket
     assert "api::path_traversal" in j["gapfill_buckets"]["failed"]
+
+
+def test_cancel_unknown_run_is_404(client):
+    r = client.post("/runs/nope/cancel")
+    assert r.status_code == 404
+
+
+def test_cancel_already_finished_run_is_409(client):
+    r = client.post(f"/runs/{RUN_A}/cancel")  # RUN_A is finished (outcome=completed)
+    assert r.status_code == 409
+    assert "already finished" in r.json()["detail"]
+
+
+def test_cancel_run_with_no_pid_is_409(client):
+    r = client.post(f"/runs/{RUN_B}/cancel")  # RUN_B is unfinished but has no pid
+    assert r.status_code == 409
+    assert "no pid recorded" in r.json()["detail"]
+
+
+def test_cancel_live_run_kills_and_marks_cancelled(client, store):
+    store.create_launch("live_run_1", "o/r")
+    store.set_pid("live_run_1", 4242)
+
+    with patch("crucible.api.launcher.os.kill", side_effect=ProcessLookupError), \
+         patch("crucible.api.launcher.os.killpg") as killpg:
+        r = client.post("/runs/live_run_1/cancel")
+
+    assert r.status_code == 200
+    j = r.json()
+    assert j["outcome"] == "cancelled"
+    assert j["status"] == "finished"
+    killpg.assert_not_called()  # already dead by the time we checked — no signal needed
+
+    # idempotent: cancelling again 409s instead of re-marking it
+    r2 = client.post("/runs/live_run_1/cancel")
+    assert r2.status_code == 409

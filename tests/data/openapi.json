@@ -335,6 +335,16 @@
       },
       "HealthOut": {
         "properties": {
+          "sandbox_detail": {
+            "default": "",
+            "title": "Sandbox Detail",
+            "type": "string"
+          },
+          "sandbox_ok": {
+            "default": true,
+            "title": "Sandbox Ok",
+            "type": "boolean"
+          },
           "status": {
             "default": "ok",
             "title": "Status",
@@ -1736,6 +1746,49 @@
         "summary": "Get Artifact",
         "tags": [
           "artifacts"
+        ]
+      }
+    },
+    "/runs/{run_id}/cancel": {
+      "post": {
+        "description": "Kill an in-progress, API-launched run (SIGTERM, then SIGKILL after a\ngrace period if it hasn't exited) and mark it `outcome=\"cancelled\"`. 409s\nfor a run with nothing to kill \u2014 already finished, or started outside the\nAPI (no pid recorded) \u2014 see `launcher.cancel_run`.",
+        "operationId": "cancel_runs__run_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel",
+        "tags": [
+          "runs"
         ]
       }
     },

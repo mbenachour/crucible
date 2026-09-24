@@ -113,6 +113,41 @@ class Store:
             if report_path:
                 r.report_path = report_path
 
+    def mark_run_cancelled(self, run_id: str) -> None:
+        """Close out a run killed on purpose via `POST /runs/{id}/cancel`
+        (`launcher.cancel_run`) — a distinct outcome from `mark_run_crashed`'s
+        `"failed"` so the UI can tell "the user stopped this" apart from "this
+        broke on its own". A no-op if the run already finished on its own in
+        the meantime (idempotent, like `finish_run`)."""
+        with self.session() as s:
+            r = s.get(Run, run_id)
+            if r is None or r.finished_at is not None:
+                return
+            r.outcome = "cancelled"
+            r.status = "finished"
+            r.finished_at = datetime.now(UTC)
+
+    def mark_run_crashed(self, run_id: str, error: str) -> None:
+        """Close out an API-launched run whose spawned `crucible run` process
+        exited non-zero (e.g. Docker unreachable — `assert_boot_environment`
+        raises before the run does any real work). Called synchronously by
+        `launcher._do_launch`'s supervising thread the moment the process
+        exits, so the row never sits at `status="running"` with a dead pid
+        waiting for `reap_dead_runs` to notice on the next `POST /runs`.
+        `error` (the crashed process's captured stderr tail) rides in
+        `clone_error` — same field `reap_dead_runs` uses for its generic
+        reap reason, just with the real exception message instead. A no-op
+        if the run already finished on its own (idempotent, like `finish_run`).
+        """
+        with self.session() as s:
+            r = s.get(Run, run_id)
+            if r is None or r.finished_at is not None:
+                return
+            r.outcome = "failed"
+            r.status = "finished"
+            r.finished_at = datetime.now(UTC)
+            r.clone_error = error[:2000]
+
     # --- API-triggered launches (issue #57) -----------------------------
     #
     # A launch's Run row exists *before* the repo is cloned, so a run_id is

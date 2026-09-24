@@ -41,6 +41,27 @@ def _docker() -> str:
     return exe
 
 
+def sandbox_status(*, timeout_s: float = 2.0) -> tuple[bool, str]:
+    """Cheap, non-raising Docker-availability probe for `GET /health` — the
+    same `docker`-on-PATH-and-`docker info`-succeeds check `assert_boot_environment`
+    does, minus the (slow) nested-container smoke test, and never raises: a
+    `crucible run` launched without `--no-sandbox` dies in
+    `assert_boot_environment` the moment Docker isn't reachable (see
+    `crucible.api.launcher`), so the UI needs this to warn *before* that
+    happens, not just report it after the fact."""
+    try:
+        exe = _docker()
+    except DockerUnavailableError as e:
+        return False, str(e)
+    try:
+        info = subprocess.run([exe, "info"], capture_output=True, text=True, timeout=timeout_s)
+    except (subprocess.TimeoutExpired, OSError) as e:
+        return False, f"`docker info` failed to run: {e}"
+    if info.returncode != 0:
+        return False, "`docker info` failed — daemon not running or not reachable"
+    return True, ""
+
+
 class DockerSandbox(Sandbox):
     def __init__(self, container_id: str, docker_bin: str) -> None:
         self._id = container_id

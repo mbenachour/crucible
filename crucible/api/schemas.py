@@ -33,6 +33,12 @@ class HealthOut(BaseModel):
     status: str = "ok"
     version: str
     store_ok: bool
+    # Docker sandbox reachability (specs.md §10) — a run launched without
+    # --no-sandbox dies in assert_boot_environment the instant this is false,
+    # so the UI surfaces it as a warning before that happens rather than only
+    # after a run crashes.
+    sandbox_ok: bool = True
+    sandbox_detail: str = ""
 
 
 # --- config -------------------------------------------------------------
