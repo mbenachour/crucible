@@ -20,6 +20,7 @@ from crucible.recon.schema import (
     ModuleMap,
     RepoKind,
     Seed,
+    StrideThreat,
     SubsystemMap,
     ThreatModel,
 )
@@ -119,6 +120,45 @@ _STRIDE_CLASS = {
     "dos": "protocol_parsing",
     "eop": "auth_bypass",
 }
+
+# (STRIDE categories, substrings in the threat description / entry point) -> the
+# attack class the threat's *mechanism* implies (issue #96). First match wins,
+# so the more specific mechanisms come first (a token in localStorage "that any
+# XSS can read" is storage, not XSS or secret exposure). Unmatched threats fall
+# back to `_STRIDE_CLASS`.
+#   - xss / html-render: no xss.md exists; `injection_passthrough` is the
+#     closest fit — a render helper/sanitizer (marked, DOMPurify, v-html) whose
+#     contract implies safety forwards attacker markup into an HTML sink.
+#   - CI secrets exposed to third-party steps: `supply_chain` names this exact
+#     case (unpinned third-party actions, `pull_request_target`, CI secret exfil).
+_STRIDE_KEYWORD_CLASS: list[tuple[tuple[str, ...], tuple[str, ...], str]] = [
+    (("spoofing", "info_disclosure", "eop"),
+     ("localstorage", "sessionstorage", "cleartext", "plaintext",
+      "stored unencrypted", "sharedpreferences", "keychain", "indexeddb"),
+     "insecure_storage"),
+    (("spoofing", "tampering", "info_disclosure", "eop"),
+     ("xss", "cross-site scripting", "v-html", "innerhtml", "dangerouslysetinnerhtml",
+      "outerhtml", "document.write", "sanitiz"),
+     "injection_passthrough"),
+    (("tampering", "info_disclosure", "eop"),
+     ("github actions", "github_token", "third-party action", ".github/workflows",
+      "pull_request_target", "ci pipeline", "ci secret"),
+     "supply_chain"),
+    (("info_disclosure",),
+     ("secret", "api key", "credential", "exposed to", "leaked", "token"),
+     "exposed_secret"),
+]
+
+
+def _class_for_threat(t: StrideThreat, incompat: set[str]) -> str:
+    """Attack class for a THREAT_FALLBACK chunk: STRIDE category combined with
+    mechanism keywords from the threat, else the category-only default."""
+    cat = t.category.lower()
+    text = f"{t.description} {t.entry_point}".lower()
+    for cats, markers, cls in _STRIDE_KEYWORD_CLASS:
+        if cat in cats and cls not in incompat and any(m in text for m in markers):
+            return cls
+    return _STRIDE_CLASS.get(cat, "auth_bypass")
 
 # Queue tiers — the head of the hunt queue is the highest-value work Recon can
 # name. `decompose` sorts on (_TIER, priority, area, class), so ranked-surface +
@@ -353,7 +393,7 @@ def decompose(
         for t in threat_model.stride:
             add(HuntChunk(
                 chunk_type=ChunkType.THREAT_FALLBACK, area="*",
-                attack_class=_STRIDE_CLASS.get(t.category.lower(), "auth_bypass"),
+                attack_class=_class_for_threat(t, incompat),
                 scope_hint=f"{t.category}: {t.description} (@ {t.entry_point})"[:200],
                 priority=6,
             ))

@@ -298,3 +298,58 @@ def test_first_batch_head_is_the_ranked_surface():
     assert head[0].chunk_type is ChunkType.SURFACE and head[0].seed_path == "api/views.py:10"
     assert {"api/views.py:10", "api/views.py:25", "core/db.py:7"} <= {c.seed_path for c in head}
     assert all(c.chunk_type is not ChunkType.CATCH_ALL for c in head[:3])
+
+
+def test_threat_fallback_class_follows_mechanism_not_just_stride_category():
+    """Issue #96 (run 19b06e7f5bc5): every info_disclosure threat was routed to
+    path_traversal and every tampering threat to unsafe_deserialization."""
+    tm = ThreatModel(stride=[
+        StrideThreat(
+            entry_point="src/services/index.ts:12", category="info_disclosure", attacker="xss",
+            description="JWT token read from localStorage and injected into every Axios "
+                        "request header; any XSS can exfiltrate it",
+        ),
+        StrideThreat(
+            entry_point=".github/workflows/ci.yml:30", category="info_disclosure",
+            attacker="malicious action maintainer",
+            description="GitHub Actions secrets.GITHUB_TOKEN and CODECOV_TOKEN exposed to "
+                        "third-party actions pinned by tag, not SHA",
+        ),
+        StrideThreat(
+            entry_point="src/pages/Article.vue:5", category="tampering", attacker="article author",
+            description="v-html directive renders sanitized HTML from marked plugin",
+        ),
+        # unrecognized mechanism -> category-only default is preserved
+        StrideThreat(entry_point="api/x.py:10", category="tampering", description="d", attacker="remote"),
+    ])
+    s = _seed(primary_language="typescript")
+    fb = [c for c in decompose(s, tm) if c.chunk_type is ChunkType.THREAT_FALLBACK]
+    by_desc = {c.scope_hint.split(": ", 1)[1][:12]: c.attack_class for c in fb}
+
+    assert by_desc["JWT token re"] == "insecure_storage"
+    assert by_desc["GitHub Actio"] == "supply_chain"
+    assert by_desc["v-html direc"] == "injection_passthrough"
+    assert by_desc["d (@ api/x.p"] == "unsafe_deserialization"
+    wrong = {"path_traversal", "unsafe_deserialization"}
+    assert not ({by_desc[k] for k in ("JWT token re", "GitHub Actio", "v-html direc")} & wrong)
+    # still deterministic
+    assert [c.attack_class for c in decompose(s, tm)] == [c.attack_class for c in decompose(s, tm)]
+
+
+def test_threat_fallback_keyword_routes_only_to_real_methodologies():
+    from pathlib import Path
+
+    from crucible.recon.decompose import _STRIDE_KEYWORD_CLASS
+
+    root = Path(__file__).resolve().parents[1] / "crucible" / "skills" / "attack_classes"
+    for _, _, cls in _STRIDE_KEYWORD_CLASS:
+        assert (root / f"{cls}.md").is_file(), cls
+
+
+def test_spoofing_token_threat_is_not_rerouted_to_exposed_secret():
+    tm = ThreatModel(stride=[StrideThreat(
+        entry_point="api/auth.py:3", category="spoofing", attacker="remote",
+        description="forged JWT token accepted because signature is not verified",
+    )])
+    fb = [c for c in decompose(_seed(), tm) if c.chunk_type is ChunkType.THREAT_FALLBACK]
+    assert [c.attack_class for c in fb] == ["auth_bypass"]
