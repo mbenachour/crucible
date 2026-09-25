@@ -188,6 +188,17 @@
             ],
             "title": "Created At"
           },
+          "cwe": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cwe"
+          },
           "description": {
             "default": "",
             "title": "Description",

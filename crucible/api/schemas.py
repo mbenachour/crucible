@@ -150,6 +150,9 @@ class FindingOut(BaseModel):
     status: str
     severity: Severity | str | None = None
     title: str = ""
+    # Deterministic, derived from attack_class (issue #94) — never model
+    # output. None when the attack class has no unambiguous CWE mapping.
+    cwe: str | None = None
     file_path: str = ""
     line_start: int | None = None
     line_end: int | None = None

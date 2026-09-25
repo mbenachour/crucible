@@ -156,6 +156,9 @@ export interface Finding {
   status: string;
   severity: Severity | string | null;
   title: string;
+  // Deterministic, derived from attack_class (issue #94) — never model
+  // output. null when the attack class has no unambiguous CWE mapping.
+  cwe: string | null;
   file_path: string;
   line_start: number | null;
   line_end: number | null;

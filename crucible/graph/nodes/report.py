@@ -17,6 +17,7 @@ from pathlib import Path
 
 from crucible.graph.state import CrucibleState
 from crucible.obs import span
+from crucible.validation.cwe import cwe_label
 from crucible.workspace.fs import commit_node
 
 log = logging.getLogger("crucible.report")
@@ -106,6 +107,7 @@ def _render_finding(store, row) -> dict:
         "finding_id": row.finding_id,
         "severity": p.get("severity", ""),
         "title": p.get("title", ""),
+        "cwe": p.get("cwe"),
         "file_path": p.get("file_path", ""),
         "line_start": p.get("line_start"),
         "line_end": p.get("line_end"),
@@ -141,9 +143,10 @@ def _markdown(report: dict) -> str:
         return "\n".join(L) + "\n"
     for f in report["findings"]:
         tm = f["threat_model"] or {}
+        label = cwe_label(f.get("cwe"))
         L += [
             f"### [{f['severity'].upper()}] {f['title']}  · `{f['finding_id']}`",
-            f"`{f['file_path']}:{f['line_start']}-{f['line_end']}`",
+            f"`{f['file_path']}:{f['line_start']}-{f['line_end']}`" + (f"  · {label}" if label else ""),
             "",
             f"- **attacker:** {tm.get('attacker', '')}",
             f"- **boundary crossed:** {tm.get('boundary_crossed', '')}",

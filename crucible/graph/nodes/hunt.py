@@ -581,8 +581,12 @@ def _persist_finding(store, ws: Path, run_id: str, fid: str, f: Finding,
                      attack_class: str, prompt_version: str, registry) -> None:
     from crucible.llm.registry import ModelRole
     from crucible.store.dao import stable_key
+    from crucible.validation.cwe import cwe_for_attack_class
 
     payload = f.model_dump(mode="json")
+    # Deterministic, not model output (issue #94) — attack_class is already
+    # known from the Hunt task, before the Hunter ever ran.
+    payload["cwe"] = cwe_for_attack_class(attack_class)
     layout.finding_path(ws, fid).write_text(json.dumps(payload, indent=2))
     if store is None:
         return
