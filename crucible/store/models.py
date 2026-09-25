@@ -136,3 +136,18 @@ class ToolUsageRow(Base):
     count: Mapped[int] = mapped_column(Integer, default=0)
     latency_s: Mapped[float] = mapped_column(Integer, default=0)
     errors: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class AttackClassCweRow(Base):
+    """attack_class -> CWE mapping (issue #94). Seeded once from
+    `dao._DEFAULT_ATTACK_CLASS_CWE` the first time a `Store` opens an empty
+    table, then editable directly in the DB from then on — a code change is
+    no longer needed to fix or extend a mapping. `Store` loads the whole
+    table into memory once at construction (`_load_cwe_cache`); a class with
+    no row here simply has no CWE (never guessed) — see hunt.py."""
+
+    __tablename__ = "attack_class_cwe"
+
+    attack_class: Mapped[str] = mapped_column(String, primary_key=True)
+    cwe_id: Mapped[str] = mapped_column(String)
+    cwe_name: Mapped[str] = mapped_column(String, default="")

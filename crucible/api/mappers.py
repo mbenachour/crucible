@@ -47,6 +47,7 @@ def finding_out(f: FindingRow, *, trail: list[ValidationRow] | None = None) -> F
         status=f.status,
         severity=p.get("severity"),
         title=p.get("title", ""),
+        cwe=p.get("cwe"),
         file_path=p.get("file_path", ""),
         line_start=p.get("line_start"),
         line_end=p.get("line_end"),

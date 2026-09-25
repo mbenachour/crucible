@@ -26,6 +26,7 @@ export function FindingDetail() {
                 {f.file_path}
                 {f.line_start ? `:${f.line_start}-${f.line_end}` : ""}
               </code>{" "}
+              {f.cwe && <>· {f.cwe} </>}
               · run <Link to={`/runs/${f.run_id}`}>{f.run_id}</Link> · <Time v={f.created_at} />
             </div>
 
