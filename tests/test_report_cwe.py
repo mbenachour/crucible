@@ -1,8 +1,10 @@
-"""report.py renders the deterministic CWE label when present (issue #94)."""
+"""report.py renders the deterministic, DB-backed CWE label when present
+(issue #94)."""
 
 from __future__ import annotations
 
 from crucible.graph.nodes.report import _markdown
+from crucible.store.dao import Store
 
 _BASE_REPORT = {
     "repo": "/repo",
@@ -39,13 +41,21 @@ def _finding(**overrides):
     return f
 
 
-def test_markdown_shows_cwe_label_when_present():
+def test_markdown_shows_cwe_label_when_present(tmp_path):
+    store = Store(f"sqlite:///{tmp_path}/f.sqlite")
     report = {**_BASE_REPORT, "findings": [_finding()]}
-    md = _markdown(report)
+    md = _markdown(report, store)
     assert "CWE-89 - SQL Injection" in md
 
 
-def test_markdown_omits_cwe_when_unmapped():
+def test_markdown_omits_cwe_when_unmapped(tmp_path):
+    store = Store(f"sqlite:///{tmp_path}/f.sqlite")
     report = {**_BASE_REPORT, "findings": [_finding(cwe=None)]}
-    md = _markdown(report)
+    md = _markdown(report, store)
     assert "CWE-" not in md
+
+
+def test_markdown_falls_back_to_bare_id_without_a_store():
+    report = {**_BASE_REPORT, "findings": [_finding()]}
+    md = _markdown(report)  # no store — e.g. a deterministic/no-registry run
+    assert "CWE-89" in md

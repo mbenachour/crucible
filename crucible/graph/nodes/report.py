@@ -17,7 +17,6 @@ from pathlib import Path
 
 from crucible.graph.state import CrucibleState
 from crucible.obs import span
-from crucible.validation.cwe import cwe_label
 from crucible.workspace.fs import commit_node
 
 log = logging.getLogger("crucible.report")
@@ -52,7 +51,7 @@ def run(state: CrucibleState, deps=None) -> CrucibleState:
             "findings": [_render_finding(store, r) for r in _sorted(upheld)],
         }
         (ws / "report.json").write_text(json.dumps(report, indent=2, default=str))
-        (ws / "report.md").write_text(_markdown(report))
+        (ws / "report.md").write_text(_markdown(report, store))
 
     state["report_path"] = str(ws / "report.json")
     commit_node(ws, "report", run_id)
@@ -124,7 +123,7 @@ def _render_finding(store, row) -> dict:
     }
 
 
-def _markdown(report: dict) -> str:
+def _markdown(report: dict, store=None) -> str:
     L: list[str] = [
         f"# Security report — {report['repo']}",
         "",
@@ -143,7 +142,7 @@ def _markdown(report: dict) -> str:
         return "\n".join(L) + "\n"
     for f in report["findings"]:
         tm = f["threat_model"] or {}
-        label = cwe_label(f.get("cwe"))
+        label = store.cwe_label(f.get("cwe")) if store is not None else (f.get("cwe") or "")
         L += [
             f"### [{f['severity'].upper()}] {f['title']}  · `{f['finding_id']}`",
             f"`{f['file_path']}:{f['line_start']}-{f['line_end']}`" + (f"  · {label}" if label else ""),

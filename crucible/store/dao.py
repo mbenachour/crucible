@@ -14,6 +14,7 @@ from sqlalchemy import case, create_engine, func, inspect, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from crucible.store.models import (
+    AttackClassCweRow,
     Base,
     FindingRow,
     HostModelConfigRow,
@@ -37,6 +38,39 @@ _RUNS_ADDED_COLUMNS = {
     "model_override": "JSON",
 }
 
+# One-time seed for `attack_class_cwe` (issue #94) — only used the first time
+# a Store opens a DB where that table is empty. Once seeded, the table (not
+# this dict) is the source of truth; edit a row directly to fix or extend a
+# mapping, no code change needed. Deliberately incomplete: a class too broad
+# or ambiguous to map confidently (misconfiguration, protocol_parsing,
+# dynamic_dispatch, api_misuse, webview_injection) has no row, same as a
+# Recon-invented repo-specific class — never guessed.
+_DEFAULT_ATTACK_CLASS_CWE: dict[str, tuple[str, str]] = {
+    "argument_injection":     ("CWE-88",   "Argument Injection or Modification"),
+    "auth_bypass":            ("CWE-287",  "Improper Authentication"),
+    "cert_pinning_bypass":    ("CWE-295",  "Improper Certificate Validation"),
+    "command_injection":      ("CWE-78",   "OS Command Injection"),
+    "deeplink_handling":      ("CWE-939",  "Improper Authorization in Handler for Custom URL Scheme"),
+    "excessive_permissions":  ("CWE-250",  "Execution with Unnecessary Privileges"),
+    "exported_component":     ("CWE-926",  "Improper Export of Android Application Components"),
+    "exposed_secret":         ("CWE-200",  "Exposure of Sensitive Information to an Unauthorized Actor"),
+    "format_string":          ("CWE-134",  "Use of Externally-Controlled Format String"),
+    "hardcoded_secret":       ("CWE-798",  "Use of Hard-coded Credentials"),
+    "injection_passthrough":  ("CWE-74",   "Injection"),
+    "insecure_storage":       ("CWE-312",  "Cleartext Storage of Sensitive Information"),
+    "integer_overflow":       ("CWE-190",  "Integer Overflow or Wraparound"),
+    "memory_oob_read":        ("CWE-125",  "Out-of-bounds Read"),
+    "memory_oob_write":       ("CWE-787",  "Out-of-bounds Write"),
+    "path_traversal":         ("CWE-22",   "Path Traversal"),
+    "sql_injection":          ("CWE-89",   "SQL Injection"),
+    "ssrf":                   ("CWE-918",  "Server-Side Request Forgery (SSRF)"),
+    "supply_chain":           ("CWE-829",  "Inclusion of Functionality from Untrusted Control Sphere"),
+    "template_injection":     ("CWE-1336", "Improper Neutralization of Special Elements Used in a Template Engine"),
+    "unsafe_deserialization": ("CWE-502",  "Deserialization of Untrusted Data"),
+    "use_after_free":         ("CWE-416",  "Use After Free"),
+    "xxe":                    ("CWE-611",  "Improper Restriction of XML External Entity Reference"),
+}
+
 _MAX_LIMIT = 1000
 _DEFAULT_LIMIT = 100
 
@@ -53,6 +87,47 @@ class Store:
         Base.metadata.create_all(self.engine)
         self._ensure_schema()
         self._Session = sessionmaker(self.engine, expire_on_commit=False, future=True)
+        self._seed_cwe_defaults()
+        self._load_cwe_cache()
+
+    def _seed_cwe_defaults(self) -> None:
+        """First-open bootstrap for `attack_class_cwe` (issue #94) — a no-op
+        once the table has any rows, whether from this seed or a hand edit,
+        so it never overwrites an operator's changes."""
+        with self.session() as s:
+            if s.execute(select(AttackClassCweRow.attack_class).limit(1)).first():
+                return
+            s.add_all(
+                AttackClassCweRow(attack_class=cls, cwe_id=cwe_id, cwe_name=name)
+                for cls, (cwe_id, name) in _DEFAULT_ATTACK_CLASS_CWE.items()
+            )
+
+    def _load_cwe_cache(self) -> None:
+        """Load the whole `attack_class_cwe` table into memory once, at
+        construction — "when the server starts" (issue #94's design
+        discussion), not a DB round trip per finding. A DB row edited while
+        a process is already running takes effect on that process's next
+        restart, not live — the same staleness window `config.yaml`'s
+        auto-discovery already has."""
+        with self.read_session() as s:
+            rows = s.execute(select(AttackClassCweRow)).scalars().all()
+            self._cwe_by_class: dict[str, str] = {r.attack_class: r.cwe_id for r in rows}
+            self._cwe_names: dict[str, str] = {r.cwe_id: r.cwe_name for r in rows if r.cwe_name}
+
+    def cwe_for_attack_class(self, attack_class: str) -> str | None:
+        """The CWE id for a built-in attack class, from the DB-backed cache
+        loaded at construction — None for anything not in the table (a too-
+        ambiguous built-in class, or a Recon-invented repo-specific one).
+        Never a guess."""
+        return self._cwe_by_class.get(attack_class)
+
+    def cwe_label(self, cwe_id: str | None) -> str:
+        """'CWE-89 - SQL Injection', or just 'CWE-89' if the name isn't
+        cached, or '' for None."""
+        if not cwe_id:
+            return ""
+        name = self._cwe_names.get(cwe_id, "")
+        return f"{cwe_id} - {name}" if name else cwe_id
 
     def _ensure_schema(self) -> None:
         """Backfill columns added to an already-created DB (issue #38)."""
