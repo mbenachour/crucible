@@ -1,6 +1,6 @@
 ---
 name: misconfiguration
-version: 0.1.0
+version: 0.2.0
 description: An infrastructure/framework setting exposes a resource or capability that should be private or off.
 languages: [hcl, yaml, json, dockerfile, ini]
 builtin: true
@@ -31,6 +31,12 @@ off (network isolation, auth requirement, encryption, logging).
 - Kubernetes: no `NetworkPolicy`, `hostPath`, `automountServiceAccountToken`,
   permissive `PodSecurity`
 - TLS/encryption at rest disabled; logging/audit disabled
+- web response headers: no Content-Security-Policy (or one with
+  `unsafe-inline` / `unsafe-eval` / `*`), no HSTS, framing allowed (no
+  X-Frame-Options / `frame-ancestors`), wildcard CORS with credentials, cookies
+  without `Secure`/`HttpOnly`/`SameSite` — check server middleware (`helmet()`),
+  proxy/hosting config (`nginx.conf`, `vercel.json`, `netlify.toml`,
+  `_headers`), and `<meta http-equiv>` in `index.html`
 
 ## Move into execution (§9.2)
 Statically evaluate the manifest/plan (`terraform plan` output, the rendered
@@ -46,7 +52,9 @@ encryption on). No source edits outside the patch (§9.4).
 ## Output
 `threat_model.boundary_crossed`: "intended private/off → exposed by <setting>".
 Severity `critical` for unauthenticated internet exposure of data/admin,
-`high` for over-broad internal scope.
+`high` for over-broad internal scope. A missing hardening header on its own
+(no CSP, no HSTS) is `low`–`medium`; raise it only when it removes the last
+barrier to a concrete bug you can name (e.g. an XSS sink CSP would have blocked).
 
 ## Anti-patterns to reject in your own output
 - the resource is public *by design* (a CDN origin, a static site bucket)

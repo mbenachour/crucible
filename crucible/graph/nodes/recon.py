@@ -398,7 +398,9 @@ def _threatmodel_task_text(seed: Seed, architecture_md: str) -> str:
         f"Frameworks: {', '.join(seed.frameworks) or 'none'}.\n\n"
         f"Architecture map:\n\n{architecture_md[:12_000]}\n\n"
         f"Static seed stats: {json.dumps(seed.stats)}.\n\n"
-        "Build the threat model."
+        "Build the threat model. Cover data-flow threats AND the config / "
+        "hardening posture (response headers such as CSP/HSTS/X-Frame-Options, "
+        "default-insecure settings) — a control set nowhere is still a threat."
     )
 
 
