@@ -271,6 +271,12 @@ crucible run --repo <path-to-target-checkout>
 | Env | Default | Meaning |
 |---|---|---|
 | `CRUCIBLE_MAX_CYCLES` | `2` | Phase 2 producer–consumer loop bound (§11) |
+| `CRUCIBLE_HUNT_WORKERS` | `4` | Hunt cells run concurrently per batch; `1` = sequential |
+| `CRUCIBLE_HUNT_MAX_TASKS` | `12` | Hunt cells per batch (× 4 batches per cycle, §8) |
+| `CRUCIBLE_HUNT_MAX_FORKS` | `12` | `fork_sibling` allowance per Hunt batch |
+
+The four above can also be set in `config.yaml` under `hunt:` (`max_cycles`,
+`workers`, `max_tasks_per_run`, `max_forks_per_run`); an env var wins.
 | `CRUCIBLE_GAPFILL_MAX_REQUEUE` | `8` | cells Gapfill re-queues per cycle |
 | `CRUCIBLE_FEEDBACK_MAX_REWRITES` | `6` | queued prompts Feedback rewrites per cycle |
 

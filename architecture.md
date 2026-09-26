@@ -115,7 +115,7 @@ START → recon → hunt ─┬─(continue)→ hunt        # bounded self-loop,
   `feedback`, and `loop_control` turn the linear pipeline into a bounded loop:
   Hunt output → Dedup folds overlaps → Validate A filters → Gapfill re-queues
   under-tested cells → Feedback rewrites their prompts → `loop_control` runs
-  another cycle (up to `hooks.MAX_CYCLES`, env `CRUCIBLE_MAX_CYCLES`, default 2)
+  another cycle (up to `hooks.max_cycles()`, env `CRUCIBLE_MAX_CYCLES`, default 2)
   or falls through to the validate/report tail. Each cycle contains a full §8
   bounded-continuation Hunt loop, so a bug found late is still deduped and
   validated in the same run.
@@ -156,8 +156,9 @@ and pushes content back into context.
 Harness mechanics kept deliberately out of prompt/agent logic.
 
 Constants: `CONTEXT_CEILING = 0.25` (§1.4) · `MAX_CONTINUATIONS = 3` (§8, hard
-cap) · `OFFLOAD_TOKEN_THRESHOLD = 2000` (§7) · `MAX_CYCLES = 2`
-(env `CRUCIBLE_MAX_CYCLES`, §11 producer–consumer loop bound).
+cap) · `OFFLOAD_TOKEN_THRESHOLD = 2000` (§7) · `max_cycles()` (default 2;
+`hunt.max_cycles` / env `CRUCIBLE_MAX_CYCLES`, §11 producer–consumer loop bound —
+resolved per call via `config.hunt_settings()`, issue #98).
 
 - **`continuation_gate(state) -> "continue" | "done"`** — *done, unit-tested.*
   The bounded-continuation control (`specs.md` §8). Returns `"done"` when either
@@ -168,9 +169,9 @@ cap) · `OFFLOAD_TOKEN_THRESHOLD = 2000` (§7) · `MAX_CYCLES = 2`
   root cause of the July 2026 OpenAI incident.
 - **`should_rehunt(state) -> bool` / `loop_gate(state) -> "rehunt" | "proceed"`**
   — *done (issue #22).* The outer producer–consumer bound: another cycle runs
-  only if Gapfill/Feedback left work queued **and** `cycle_count < MAX_CYCLES`.
+  only if Gapfill/Feedback left work queued **and** `cycle_count < max_cycles()`.
   Same fail-closed shape as `continuation_gate`. `graph_recursion_limit()`
-  derives the LangGraph super-step backstop from `MAX_CYCLES` +
+  derives the LangGraph super-step backstop from `max_cycles()` +
   `MAX_CONTINUATIONS`.
 - **`offload_and_compact(node_name, state) -> state`** — *stub.* The attach point
   for tool-output offloading (large output → `workspace/offload/<call_id>.txt`,
@@ -227,7 +228,7 @@ reflection fact or an underived sink), `specialist` / `threat_fallback` (from R2
 **Queue ordering (issue #35).** `decompose` tier-sorts on
 `(_TIER[chunk_type], priority, area, class)` with
 `_TIER = surface=0, taint=0, specialist=1, risk=2, threat_fallback=3, catch_all=4`,
-so the first `HUNT_MAX_TASKS_PER_RUN` batch Hunt pops off the head = the
+so the first `max_tasks_per_run` batch Hunt pops off the head = the
 highest-value hunts Recon can name (ranked attack surface + taint), and the
 blind baseline sweep is a backstop for Gapfill. When the surface is empty
 (`partial` / `seed_only` with no entry points) the pre-#35 deterministic queue
@@ -244,12 +245,30 @@ One task = **one attack class + one scope hint + `architecture.md` + prior
 coverage**. Never "find vulnerabilities in this repo" — narrow scoping is what
 makes the model behave like a researcher instead of wandering.
 
-**Node flow.** Pops up to `HUNT_MAX_TASKS_PER_RUN` cells (env
-`CRUCIBLE_HUNT_MAX_TASKS`, default 6) off the head of `pending_hunts` per
+**Node flow.** Pops up to `max_tasks_per_run` cells (`hunt.max_tasks_per_run` /
+env `CRUCIBLE_HUNT_MAX_TASKS`, default 12) off the head of `pending_hunts` per
 invocation; the bounded-continuation self-loop (§8, cap 3) re-enters for the
-next batch, so the effective ceiling is `MAX_TASKS * 4`, and `continuation_count`
-is incremented here so the gate cannot loop forever. Whatever is unhunted when
-the continuation cap is hit is left for Gapfill (Phase 2). Per cell:
+next batch, so the per-cycle ceiling is `max_tasks_per_run * 4`, and
+`continuation_count` is incremented here so the gate cannot loop forever.
+Whatever is unhunted when the continuation cap is hit is left for Gapfill
+(Phase 2).
+
+**Parallel batch (issue #98).** The cells of one batch run concurrently on a
+`ThreadPoolExecutor` of width `workers` (`hunt.workers` / env
+`CRUCIBLE_HUNT_WORKERS`, default 4; `1` = the strictly sequential path) — the
+same pattern as Recon R1b. Each cell owns its own sandbox handle, agent and
+`thread_id`. What cells share is guarded: the run-wide fork allowance is a
+lock-guarded counter (`_ForkBudget`); appends to `forks.jsonl`,
+`coverage/<area>.md`, `errors.jsonl` and store writes go through one `_IO_LOCK`;
+graph state (`finding_ids`, `completed_cells`, `fork_count`, the shallow
+re-queue) is folded in on the node's own thread **in batch order**, not
+completion order, and drained forks are stably re-sorted by parent position —
+so a parallel batch yields the same state, in the same order, as a sequential
+one. Two things are still completion-order under `workers > 1`: the order of
+blocks inside a `coverage/<area>.md` file, and *which* cells get a fork when the
+fork budget is contended. A sandbox provider that doesn't declare
+`concurrent_sandboxes = True` is run with `workers = 1`. All knobs:
+`config.hunt_settings()` (defaults ← config file `hunt:` block ← env). Per cell:
 
 1. **Explore** — a plain ReAct agent (`build_agent` on `ModelRole.HUNTER`, the
    same middleware stack Recon uses) with a per-task budget of
@@ -279,7 +298,9 @@ the continuation cap is hit is left for Gapfill (Phase 2). Per cell:
   than over-report; tightening that is skill-prompt work against the fixtures.
 - **Sibling forking:** `fork_sibling` writes a `risk` chunk to
   `workspace/recon/forks.jsonl`, drained into `pending_hunts` for the next
-  continuation (bounded by `MAX_FORKS_PER_RUN`). Fork rate is tracked per model.
+  continuation (bounded by `max_forks_per_run`, `hunt.max_forks_per_run` / env
+  `CRUCIBLE_HUNT_MAX_FORKS`, default 12, shared by the whole batch). Each fork
+  records `forked_from` (parent task id). Fork rate is tracked per model.
 - **Shallow detection (§13):** a cell whose explore made `< SHALLOW_TOOLCALLS`
   tool calls and produced no finding is re-queued once (a crashed dependency
   looks like a fast clean pass). An explore that ends on a provider 400
@@ -367,11 +388,11 @@ Bounded at `FEEDBACK_MAX_REWRITES = 6`; skips a prompt that already carries a
 ### 4.3d `loop_control.py` — producer–consumer loop control (§11, issue #22)  · *done*
 
 Owns the outer bound. Increments `cycle_count`; if `hooks.should_rehunt` (work
-queued **and** `cycle_count < MAX_CYCLES`) it resets `continuation_count = 0` so
+queued **and** `cycle_count < max_cycles()`) it resets `continuation_count = 0` so
 the §8 continuation loop runs again for the re-queued cells, and `hooks.loop_gate`
 routes the conditional edge back to `hunt`. Otherwise control falls through to
 `validate_bug`. Every cycle is a full bounded-continuation Hunt loop, so the
-effective Hunt ceiling is `MAX_CYCLES × (MAX_CONTINUATIONS + 1)` batches — a
+effective Hunt ceiling is `max_cycles() × (MAX_CONTINUATIONS + 1)` batches — a
 second safety bound on top of the §8 cap, never a replacement for it.
 
 ### 4.4 `validate_bug.py` — Validate Pass B, "is it real?" (§9.4)  · *stub*
@@ -599,9 +620,16 @@ login session.
 
 ### 9.1 Interface  · *protocol done; Docker backend wired + smoke-tested*
 
-- **`SandboxProvider`** (`Protocol`): `create(task_id, repo_mount, limits) -> Sandbox`,
-  `exec(cmd, timeout_s) -> ExecResult`, `destroy()`.
-- **`Sandbox`** (`Protocol`): `exec`, `destroy`.
+- **`SandboxProvider`** (`Protocol`): `create(task_id, repo_mount, limits) -> Sandbox`
+  — a factory. Each call returns a fresh, independent handle and must be safe to
+  call from several threads (issue #98: Hunt runs cells concurrently). The §10
+  sketch's provider-level `exec`/`destroy` is gone from the Docker backend — it
+  was a single shared "current container" slot. A provider opts in to concurrent
+  use with `concurrent_sandboxes = True` (`sandbox.supports_concurrency`);
+  a legacy provider whose `create()` returns `None` is used as its own handle,
+  sequentially.
+- **`Sandbox`** (`Protocol`): `exec(cmd, timeout_s) -> ExecResult`, `destroy()` —
+  act on this sandbox only.
 - **`ExecResult`**: `exit_code`, `stdout`, `stderr`, `timed_out`,
   `egress_attempted` (→ run-level alert).
 - **`SandboxLimits`**: `cpu_seconds`, `memory_mb`, `wall_clock_s`, `max_pids`,
@@ -842,7 +870,7 @@ expectations; do not compare a C fixture's FP rate to a Python one.
    `'mechanical_passed'`, no model spent.
 6. **Gapfill / Feedback** (`specs.md` §11): re-queue under-tested cells, rewrite
    their prompts from this run's failures; `loop_control` runs another cycle
-   (≤ `MAX_CYCLES`) or falls through.
+   (≤ `max_cycles()`) or falls through.
 7. **Validate B** (`VALIDATOR_BUG`, different model): re-reads, tries to disprove.
    Response classified before parse. `ValidationRow(pass_name='bug',
    verdict=...)`. Finding → `bug_upheld` / `bug_refuted`.
@@ -895,12 +923,15 @@ exceeded 14) — per-PR needs a separate, cheaper, smaller harness.
 | `--checkpoint-db` | `cli run` | `SqliteSaver` path (execution state) |
 | `--store-url` | `cli status` | SQLAlchemy URL for `findings.sqlite` (domain state) |
 | `--workspace` | `cli run` | agent-writable working tree (default `.crucible-workspace`) |
-| `CRUCIBLE_MAX_CYCLES` | `hooks` | producer–consumer loop bound (§11, default 2) |
+| `CRUCIBLE_MAX_CYCLES` | `config.hunt_settings` | producer–consumer loop bound (§11, default 2; file key `hunt.max_cycles`) |
+| `CRUCIBLE_HUNT_WORKERS` | `config.hunt_settings` | Hunt batch thread-pool width (default 4; `1` = sequential; file key `hunt.workers`) |
+| `CRUCIBLE_HUNT_MAX_TASKS` | `config.hunt_settings` | cells per Hunt invocation (default 12; file key `hunt.max_tasks_per_run`) |
+| `CRUCIBLE_HUNT_MAX_FORKS` | `config.hunt_settings` | `fork_sibling` allowance per Hunt invocation (default 12; file key `hunt.max_forks_per_run`) |
 | `CRUCIBLE_GAPFILL_MAX_REQUEUE` / `CRUCIBLE_GAPFILL_CELL_RETRY` | `gapfill` | cells re-queued per pass (8) / max passes before a weak cell is left alone (2) |
 | `CRUCIBLE_FEEDBACK_MAX_REWRITES` | `feedback` | queued prompts rewritten per pass (6) |
 
-Constants worth knowing: `hooks.MAX_CONTINUATIONS = 3`,
-`hooks.MAX_CYCLES = 2`, `hooks.OFFLOAD_TOKEN_THRESHOLD = 2000`,
+Constants worth knowing: `hooks.MAX_CONTINUATIONS = 3` (not configurable — §8),
+`hooks.OFFLOAD_TOKEN_THRESHOLD = 2000`,
 `hooks.CONTEXT_CEILING = 0.25`, `classify.MAX_TRANSIENT_RETRIES = 3`,
 `recon.RECON_SUBAGENTS = 3`, `dedup.DEDUP_MAX_PAIRS = 40`,
 `dedup.DEDUP_MAX_JUDGE = 12`.
@@ -964,7 +995,7 @@ Constants worth knowing: `hooks.MAX_CONTINUATIONS = 3`,
 | Dedup (shortlist + agent judge, cross-run `stable_key`) | **done (issue #20)** |
 | Gapfill (re-queue under-tested `area × attack_class` cells) | **done (issue #19)** |
 | Feedback (rewrite queued prompts from failures / shallow / repeated miss) | **done (issue #21)** |
-| Producer–consumer loop (stages 4–8, bounded by `MAX_CYCLES`) | **done (issue #22)** |
+| Producer–consumer loop (stages 4–8, bounded by `max_cycles()`) | **done (issue #22)** |
 | Model registry + hunter≠validator assertion | done, tested |
 | Workspace layout + git-per-node | done |
 | Tool-output offloading | done, tested |

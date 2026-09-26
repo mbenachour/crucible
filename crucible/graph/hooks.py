@@ -5,8 +5,7 @@ These are harness mechanics, deliberately kept out of agent/prompt logic.
 
 from __future__ import annotations
 
-import os
-
+from crucible.config import hunt_settings
 from crucible.graph.state import CrucibleState
 
 CONTEXT_CEILING = 0.25          # §1.4
@@ -16,9 +15,15 @@ OFFLOAD_TOKEN_THRESHOLD = 2000  # §7 — starting value
 # §11 — the producer-consumer loop runs stages 4-8 (hunt → dedup → validate →
 # gapfill/feedback → re-queue) repeatedly within one run. Each cycle contains a
 # full bounded-continuation Hunt loop, so the effective Hunt ceiling is
-# MAX_CYCLES * (MAX_CONTINUATIONS + 1) batches. This is a second safety bound on
-# top of the §8 cap, not a replacement for it.
-MAX_CYCLES = max(1, int(os.environ.get("CRUCIBLE_MAX_CYCLES", "2")))
+# max_cycles() * (MAX_CONTINUATIONS + 1) batches. This is a second safety bound
+# on top of the §8 cap, not a replacement for it.
+
+
+def max_cycles() -> int:
+    """The §11 cycle bound — `hunt.max_cycles` in a config file or env
+    `CRUCIBLE_MAX_CYCLES` (default 2). Resolved per call so the config-file
+    value is honoured even though this module is imported before it's read."""
+    return hunt_settings().max_cycles
 
 
 def continuation_gate(state: CrucibleState) -> str:
@@ -45,7 +50,7 @@ def should_rehunt(state: CrucibleState) -> bool:
     """Outer-loop decision (§11, issue #22): another producer-consumer cycle is
     worth running only if Gapfill/Feedback left work queued and the cycle cap is
     not yet hit. Bounded exactly like the §8 continuation cap."""
-    if state.get("cycle_count", 0) >= MAX_CYCLES:
+    if state.get("cycle_count", 0) >= max_cycles():
         return False
     return bool(state.get("pending_hunts"))
 
@@ -58,10 +63,10 @@ def loop_gate(state: CrucibleState) -> str:
 
 def graph_recursion_limit() -> int:
     """LangGraph super-step budget for one full run. The loop is already bounded
-    by MAX_CYCLES and MAX_CONTINUATIONS; this is only the backstop that keeps a
+    by max_cycles() and MAX_CONTINUATIONS; this is only the backstop that keeps a
     genuinely stuck graph from spinning forever."""
     per_cycle = (MAX_CONTINUATIONS + 1) + 7  # hunt batches + phase-2 stages
-    return 12 + MAX_CYCLES * per_cycle + 12
+    return 12 + max_cycles() * per_cycle + 12
 
 
 def offload_and_compact(node_name: str, state: CrucibleState) -> CrucibleState:

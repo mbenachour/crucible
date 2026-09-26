@@ -27,6 +27,16 @@ models:
     temperature: 0.1
   # base_url: optional; omit to use https://openrouter.ai/api/v1
 
+# --- Hunt budget (issue #98) ------------------------------------------------
+# Env vars win: CRUCIBLE_HUNT_WORKERS, CRUCIBLE_HUNT_MAX_TASKS,
+# CRUCIBLE_HUNT_MAX_FORKS, CRUCIBLE_MAX_CYCLES. The §8 continuation cap (3) is
+# fixed, so per-run ceiling = max_tasks_per_run * 4 * max_cycles cells.
+hunt:
+  workers: 4              # cells hunted concurrently per batch; 1 = sequential
+  max_tasks_per_run: 12   # cells per Hunt batch
+  max_forks_per_run: 12   # fork_sibling allowance per batch
+  max_cycles: 2           # §11 producer-consumer cycles
+
 # --- Tracing toggles (specs.md §13) ---------------------------------------
 # Enables spans; the API key itself is still read from the environment.
 tracing:

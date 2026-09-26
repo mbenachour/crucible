@@ -47,15 +47,35 @@ class SandboxLimits:
 
 
 class Sandbox(Protocol):
+    """One live, isolated sandbox — the per-task handle `create()` returns.
+    `exec`/`destroy` act on this sandbox only, never on a sibling's."""
+
     def exec(self, cmd: str, timeout_s: int) -> ExecResult: ...
     def destroy(self) -> None: ...
 
 
 @runtime_checkable
 class SandboxProvider(Protocol):
+    """A factory for sandboxes (issue #98). `create()` returns a fresh,
+    independent `Sandbox` handle and must be safe to call from several threads
+    at once — Hunt runs tasks concurrently and gives each its own handle, so a
+    provider holds no per-sandbox state of its own.
+
+    The §10 sketch put `exec`/`destroy` on the provider; that shape can only
+    ever hold one live sandbox, so it moved onto the handle. A legacy provider
+    whose `create()` returns ``None`` (mutating itself instead) still works:
+    Hunt uses the provider as the handle and runs sequentially, unless the
+    provider sets ``concurrent_sandboxes = True`` (see `supports_concurrency`).
+    """
+
     def create(self, task_id: str, repo_mount: str, limits: SandboxLimits) -> Sandbox: ...
-    def exec(self, cmd: str, timeout_s: int) -> ExecResult: ...
-    def destroy(self) -> None: ...
+
+
+def supports_concurrency(provider: object) -> bool:
+    """True when `provider.create()` hands out independent handles that may be
+    driven from several threads at once. Opt-in by a class attribute, so an
+    unknown/legacy provider is treated as single-sandbox (sequential only)."""
+    return bool(getattr(provider, "concurrent_sandboxes", False))
 
 
 def assert_boot_environment() -> None:

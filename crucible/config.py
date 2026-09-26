@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import os
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -82,6 +83,56 @@ MODEL_CALLS_PER_TASK = 60       # ModelCallLimitMiddleware run_limit (paired wit
 RECON_MAX_SUBAGENTS = max(1, int(os.environ.get("CRUCIBLE_RECON_MAX_SUBAGENTS", "8")))
 RECON_MAX_PARALLEL = max(1, int(os.environ.get("CRUCIBLE_RECON_MAX_PARALLEL", "4")))
 RECON_ORIENT_READ_BUDGET = max(4, int(os.environ.get("CRUCIBLE_RECON_ORIENT_BUDGET", "24")))
+
+
+# Hunt budget + fan-out knobs (issue #98). Unlike the RECON_* constants these
+# are resolved lazily, on every read, so a config file's ``hunt:`` block (folded
+# into the environment by `apply_file_hunt_env` at CLI start) is seen even
+# though the graph modules were imported first.
+_HUNT_KNOBS: dict[str, tuple[str, int, int]] = {
+    # config.yaml key:   (env var,                   default, minimum)
+    "workers":           ("CRUCIBLE_HUNT_WORKERS",    4, 1),
+    "max_tasks_per_run": ("CRUCIBLE_HUNT_MAX_TASKS",  12, 1),
+    "max_forks_per_run": ("CRUCIBLE_HUNT_MAX_FORKS",  12, 0),
+    "max_cycles":        ("CRUCIBLE_MAX_CYCLES",      2, 1),
+}
+
+
+@dataclass(frozen=True)
+class HuntSettings:
+    """Effective Hunt budget. `workers` is the per-batch thread-pool width —
+    ``1`` is the strictly sequential path. The per-run ceiling on hunted cells
+    is ``max_tasks_per_run * (MAX_CONTINUATIONS + 1) * max_cycles``;
+    `MAX_CONTINUATIONS` itself is not a knob (§8: a safety cap, non-negotiable).
+    """
+
+    workers: int
+    max_tasks_per_run: int
+    max_forks_per_run: int
+    max_cycles: int
+
+
+def hunt_settings() -> HuntSettings:
+    """Built-in defaults <- config file ``hunt:`` block <- environment."""
+    vals: dict[str, int] = {}
+    for name, (var, default, minimum) in _HUNT_KNOBS.items():
+        raw = os.environ.get(var, "").strip()
+        try:
+            vals[name] = max(minimum, int(raw)) if raw else default
+        except ValueError as e:
+            raise ValueError(f"{var}={raw!r} is not an integer") from e
+    return HuntSettings(**vals)
+
+
+def apply_file_hunt_env(config_path: str | os.PathLike | None = None) -> None:
+    """Fold a config file's ``hunt:`` block into ``os.environ`` via
+    ``setdefault`` — a real env var always wins, exactly like the ``tracing:``
+    block (`apply_file_tracing_env`). Unknown keys are ignored."""
+    for path in _config_paths(config_path):
+        block = _read_config_file(path).get("hunt") or {}
+        for name, (var, _default, _minimum) in _HUNT_KNOBS.items():
+            if block.get(name) is not None:
+                os.environ.setdefault(var, str(int(block[name])))
 
 
 # Auto-discovered in the CWD when no --config is given, applied in this order

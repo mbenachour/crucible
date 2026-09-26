@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from crucible.graph.hooks import MAX_CYCLES, should_rehunt
+from crucible.graph.hooks import max_cycles, should_rehunt
 from crucible.graph.state import CrucibleState
 from crucible.workspace.fs import commit_node
 
@@ -31,14 +31,15 @@ def run(state: CrucibleState, deps=None) -> CrucibleState:
     queued = len(state.get("pending_hunts") or [])
     findings = len(state.get("finding_ids") or [])
 
+    cap = max_cycles()
     if should_rehunt(state):
         state["continuation_count"] = 0
         log.info(
             "loop  cycle %d/%d complete — re-hunting %d re-queued cell(s); "
-            "findings so far=%d", cycle, MAX_CYCLES, queued, findings,
+            "findings so far=%d", cycle, cap, queued, findings,
         )
     else:
-        reason = "cycle cap reached" if cycle >= MAX_CYCLES else "no new tasks queued"
+        reason = "cycle cap reached" if cycle >= cap else "no new tasks queued"
         log.info(
             "loop  producer-consumer loop done after %d cycle(s) (%s) — "
             "%d finding(s) to the validate/report tail", cycle, reason, findings,
