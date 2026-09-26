@@ -17,6 +17,12 @@ plain ReAct agent, then one forced `tool_choice=<schema>` **emit**. Small
 open-weight models almost never call an emit-tool on their own while a
 ToolStrategy is in reach, and `create_agent` discards a plain-text answer.
 
+Tasks in a batch run concurrently on a thread pool (issue #98) — each owns its
+own sandbox handle, agent, and `thread_id`; everything they share (the run-wide
+fork budget, append-only workspace files, the store) is lock-guarded, and their
+results fold back into graph state in batch order, so the outcome does not
+depend on which task finishes first. `hunt.workers: 1` is the sequential path.
+
 Failure modes designed against (§9.2):
   * edits source so its own exploit works        -> killed by the PoC gate
   * writes a tautological test that proves nothing -> killed by the deny-list
@@ -25,21 +31,24 @@ Failure modes designed against (§9.2):
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import os
 import re
+import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError
 
-from crucible.config import MODEL_CALLS_PER_TASK
+from crucible.config import MODEL_CALLS_PER_TASK, hunt_settings
 from crucible.graph.hooks import MAX_CONTINUATIONS
 from crucible.graph.state import CrucibleState
 from crucible.obs import progress, span
-from crucible.sandbox import SandboxLimits
+from crucible.sandbox import SandboxLimits, supports_concurrency
 from crucible.validation.schema import Finding, tautology_reasons
 from crucible.workspace import layout
 from crucible.workspace.fs import commit_node
@@ -48,10 +57,11 @@ log = logging.getLogger("crucible.hunt")
 
 HUNT_TOOLS = ["list_dir", "read_file", "search", "sandbox_exec", "fork_sibling", "wishlist_write"]
 
-# Per-invocation task budget — Hunt is re-entered up to MAX_CONTINUATIONS times
-# (§8), so the effective ceiling is HUNT_MAX_TASKS_PER_RUN * (MAX_CONTINUATIONS+1).
-# Gapfill (Phase 2) sweeps whatever is left. Overridable for fast smoke runs.
-HUNT_MAX_TASKS_PER_RUN = int(os.environ.get("CRUCIBLE_HUNT_MAX_TASKS", "6"))
+# Per-invocation budget (tasks per batch, pool width, fork allowance) comes from
+# `crucible.config.hunt_settings()` — config file `hunt:` block or env, read on
+# every invocation. Hunt is re-entered up to MAX_CONTINUATIONS times (§8), so the
+# per-cycle ceiling is max_tasks_per_run * (MAX_CONTINUATIONS + 1); Gapfill
+# (Phase 2) sweeps whatever is left.
 # Phase-A exploration budget per task (model calls). The §8 hard cap
 # (MODEL_CALLS_PER_TASK) still bounds each agent; this lower value keeps Hunt
 # from spending the whole budget reading one file tree.
@@ -62,8 +72,28 @@ HUNT_RECURSION_LIMIT = 4 * MODEL_CALLS_PER_TASK + 20
 # A hunt that finishes this fast with nothing to show is usually a crashed
 # dependency, not a clean cell (§13) — retry it once via the continuation loop.
 SHALLOW_TOOLCALLS = 2
-MAX_FORKS_PER_RUN = 12
 SANDBOX_EXEC_CAP = 6000  # chars of sandbox output shown to the model
+
+# Serializes every write concurrent tasks share: forks.jsonl, coverage/<area>.md
+# (tasks in one area append to the same file), errors.jsonl, and the store.
+_IO_LOCK = threading.RLock()
+
+
+class _ForkBudget:
+    """Run-wide fork allowance (`max_forks_per_run`), drawn down atomically by
+    every task in the batch. A per-task snapshot would let N concurrent tasks
+    each spend the whole budget."""
+
+    def __init__(self, n: int) -> None:
+        self._left = max(0, n)
+        self._lock = threading.Lock()
+
+    def take(self) -> bool:
+        with self._lock:
+            if self._left <= 0:
+                return False
+            self._left -= 1
+            return True
 
 
 class HuntResult(BaseModel):
@@ -106,64 +136,88 @@ def run(state: CrucibleState, deps=None) -> CrucibleState:
     store = getattr(deps, "store", None)
     sandbox_provider = getattr(deps, "sandbox_provider", None)
 
+    cfg = hunt_settings()
     # priority is already baked into queue order by Recon R3; take the head.
-    batch = pending[:HUNT_MAX_TASKS_PER_RUN]
-    rest = pending[HUNT_MAX_TASKS_PER_RUN:]
-    requeue: list[dict] = []
-    new_finding_ids: list[str] = []
-    forks_this_run = 0
+    batch = pending[:cfg.max_tasks_per_run]
+    rest = pending[cfg.max_tasks_per_run:]
+    workers = max(1, min(cfg.workers, len(batch)))
+    if workers > 1 and sandbox_provider is not None and not supports_concurrency(sandbox_provider):
+        log.warning("hunt  sandbox provider %s holds a single shared sandbox — running "
+                    "sequentially", type(sandbox_provider).__name__)
+        workers = 1
+    fork_budget = _ForkBudget(cfg.max_forks_per_run)
+    log.info("hunt batch  %d task(s)  workers=%d  (max_tasks_per_run=%d, rest=%d)",
+             len(batch), workers, cfg.max_tasks_per_run, len(rest))
 
     bar_cm = progress("Hunt", len(batch))
     bar = bar_cm.__enter__()
-    try:
-        for task in batch:
-            task_id = task["task_id"]
-            area = task.get("area") or "."
-            attack_class = task["attack_class"]
-            bar.set(f"Hunt · {task_id} {attack_class}")
-            log.info(
-                "hunt task %s  START  %-22s %-10s area=%s  scope=%s",
-                task_id, attack_class, task.get("chunk_type", "?"), area,
-                (task.get("scope_hint") or "(none)")[:70],
-            )
-            with span("hunt.task", task_id=task_id, attack_class=attack_class):
-                t0 = time.monotonic()
-                try:
-                    fids, forks, shallow = _hunt_one(
-                        task=task, repo=repo, ws=ws, run_id=run_id, arch_md=arch_md,
-                        catalog=catalog, deps=deps, registry=registry, store=store,
-                        sandbox_provider=sandbox_provider,
-                        forks_left=MAX_FORKS_PER_RUN - forks_this_run,
-                    )
-                except Exception as e:  # noqa: BLE001 — resilience: log and continue
-                    _log_error(errors_path, "HUNT", task_id, f"{type(e).__name__}: {e}")
-                    shallow, fids, forks = False, [], 0
-                new_finding_ids.extend(fids)
-                forks_this_run += forks
-                dt = time.monotonic() - t0
-                log.info(
-                    "hunt task %s  DONE   %-22s %s  %.1fs  findings=%d forks=%d%s",
-                    task_id, attack_class, task.get("chunk_type", "?"), dt,
-                    len(fids), forks, "  [shallow]" if shallow else "",
+
+    def _one(task: dict) -> tuple[list[str], int, bool]:
+        """Run one task start to finish; never raises. Touches no graph state —
+        results are folded in below, on this node's own thread."""
+        task_id = task["task_id"]
+        area = task.get("area") or "."
+        attack_class = task["attack_class"]
+        bar.set(f"Hunt · {task_id} {attack_class}")
+        log.info(
+            "hunt task %s  START  %-22s %-10s area=%s  scope=%s",
+            task_id, attack_class, task.get("chunk_type", "?"), area,
+            (task.get("scope_hint") or "(none)")[:70],
+        )
+        with span("hunt.task", task_id=task_id, attack_class=attack_class):
+            t0 = time.monotonic()
+            try:
+                fids, forks, shallow = _hunt_one(
+                    task=task, repo=repo, ws=ws, run_id=run_id, arch_md=arch_md,
+                    catalog=catalog, deps=deps, registry=registry, store=store,
+                    sandbox_provider=sandbox_provider, fork_budget=fork_budget,
                 )
-                cell = f"{area}::{attack_class}"
-                if cell not in state["completed_cells"]:
-                    state["completed_cells"].append(cell)
-                # §13 shallow-detection: one retry via the continuation loop.
-                if shallow and not fids and task.get("continuation_count", 0) < 1:
-                    t2 = dict(task)
-                    t2["continuation_count"] = task.get("continuation_count", 0) + 1
-                    requeue.append(t2)
-            bar.tick()
+            except Exception as e:  # noqa: BLE001 — resilience: log and continue
+                _log_error(errors_path, "HUNT", task_id, f"{type(e).__name__}: {e}")
+                shallow, fids, forks = False, [], 0
+            log.info(
+                "hunt task %s  DONE   %-22s %s  %.1fs  findings=%d forks=%d%s",
+                task_id, attack_class, task.get("chunk_type", "?"), time.monotonic() - t0,
+                len(fids), forks, "  [shallow]" if shallow else "",
+            )
+        bar.tick()
+        return fids, forks, shallow
+
+    try:
+        if workers == 1:
+            outcomes = [_one(task) for task in batch]
+        else:
+            # Each task gets its own copy of the caller's context so its span
+            # nests under this node's span instead of becoming a root.
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="hunt") as ex:
+                futures = [ex.submit(contextvars.copy_context().run, _one, t) for t in batch]
+                outcomes = [f.result() for f in futures]
     finally:
         bar_cm.__exit__(None, None, None)
+
+    # Fold results into graph state in batch (= priority) order, not completion
+    # order, so parallel and sequential runs produce identically ordered state.
+    requeue: list[dict] = []
+    new_finding_ids: list[str] = []
+    forks_this_run = 0
+    for task, (fids, forks, shallow) in zip(batch, outcomes, strict=True):
+        new_finding_ids.extend(fids)
+        forks_this_run += forks
+        cell = f"{task.get('area') or '.'}::{task['attack_class']}"
+        if cell not in state["completed_cells"]:
+            state["completed_cells"].append(cell)
+        # §13 shallow-detection: one retry via the continuation loop.
+        if shallow and not fids and task.get("continuation_count", 0) < 1:
+            t2 = dict(task)
+            t2["continuation_count"] = task.get("continuation_count", 0) + 1
+            requeue.append(t2)
 
     state["finding_ids"] = list(state.get("finding_ids") or []) + new_finding_ids
     state["fork_count"] = state.get("fork_count", 0) + forks_this_run
 
     # Anything not attempted this pass stays queued for the next continuation;
     # once continuation_count hits the cap the gate ends the loop regardless.
-    remaining = requeue + rest + _drain_forks(ws)
+    remaining = requeue + rest + _drain_forks(ws, [t["task_id"] for t in batch])
     if cont >= MAX_CONTINUATIONS:
         if remaining:
             log.info("hunt  continuation cap reached — %d task(s) left unhunted "
@@ -184,7 +238,7 @@ def run(state: CrucibleState, deps=None) -> CrucibleState:
 
 def _hunt_one(
     *, task: dict, repo: str, ws: Path, run_id: str, arch_md: str, catalog: str,
-    deps, registry, store, sandbox_provider, forks_left: int,
+    deps, registry, store, sandbox_provider, fork_budget: _ForkBudget,
 ) -> tuple[list[str], int, bool]:
     """Explore -> emit for a single hunt cell. Returns (finding_ids, forks, shallow)."""
     from crucible.llm.registry import ModelRole
@@ -199,7 +253,7 @@ def _hunt_one(
     try:
         tools = _hunt_tools(
             repo=repo, sandbox=sandbox, task=task, ws=ws, forks=forks, wishes=wishes,
-            forks_left=forks_left,
+            fork_budget=fork_budget,
         )
         allowed = {t.name for t in tools}
         system_prompt = _hunt_system_prompt()
@@ -216,8 +270,9 @@ def _hunt_one(
 
     # persist wishes regardless of finding outcome
     if store is not None:
-        for w in wishes:
-            _persist_wish(store, run_id, task_id, w)
+        with _IO_LOCK:
+            for w in wishes:
+                _persist_wish(store, run_id, task_id, w)
 
     finding_ids: list[str] = []
     coverage_lines: list[str] = []
@@ -229,7 +284,8 @@ def _hunt_one(
             coverage_lines.append(f"- rejected (tautology deny-list): {reasons[0]}")
         else:
             fid = f"{task_id}-{uuid.uuid4().hex[:6]}"
-            _persist_finding(store, ws, run_id, fid, f, attack_class, prompt_version, registry)
+            with _IO_LOCK:
+                _persist_finding(store, ws, run_id, fid, f, attack_class, prompt_version, registry)
             finding_ids.append(fid)
             coverage_lines.append(
                 f"- **finding {fid}** ({f.severity.value}): {f.title} "
@@ -406,7 +462,8 @@ def _count_tool_calls(messages: list) -> int:
 # ------------------------------------------------------------------------ tools
 
 
-def _hunt_tools(*, repo: str, sandbox, task: dict, ws: Path, forks: list, wishes: list, forks_left: int):
+def _hunt_tools(*, repo: str, sandbox, task: dict, ws: Path, forks: list, wishes: list,
+                fork_budget: _ForkBudget):
     from langchain_core.tools import tool
 
     from crucible.agents.tools import read_only_fs_tools
@@ -439,7 +496,7 @@ def _hunt_tools(*, repo: str, sandbox, task: dict, ws: Path, forks: list, wishes
         """Spin off a sibling hunt for a serious issue OUTSIDE the current scope.
         `structural_seed` must be a precise 'file:line — what to look at' pointer;
         `reason` says why it is out of scope here. Do not use it to wander."""
-        if len(forks) >= max(0, forks_left):
+        if not fork_budget.take():
             return "fork budget exhausted for this run; note it in your finding/negative instead."
         seed = structural_seed.strip()
         forks.append({"structural_seed": seed, "reason": reason.strip()})
@@ -451,11 +508,13 @@ def _hunt_tools(*, repo: str, sandbox, task: dict, ws: Path, forks: list, wishes
             "chunk_type": "risk",
             "seed_path": seed[:200],
             "continuation_count": 0,
+            "forked_from": task["task_id"],
         }
         fp = ws / "recon" / "forks.jsonl"
-        fp.parent.mkdir(parents=True, exist_ok=True)
-        with fp.open("a") as fh:
-            fh.write(json.dumps(sib) + "\n")
+        with _IO_LOCK:
+            fp.parent.mkdir(parents=True, exist_ok=True)
+            with fp.open("a") as fh:
+                fh.write(json.dumps(sib) + "\n")
         return f"forked: {seed[:120]}"
 
     @tool
@@ -473,14 +532,18 @@ def _hunt_tools(*, repo: str, sandbox, task: dict, ws: Path, forks: list, wishes
 
 
 def _make_sandbox(provider, task_id: str, repo: str):
+    """This task's own sandbox handle (issue #98) — never the shared provider,
+    so concurrent tasks cannot exec into or destroy each other's container."""
     if provider is None:
         return None
     try:
-        provider.create(task_id, repo, SandboxLimits())
-        return provider
+        handle = provider.create(task_id, repo, SandboxLimits())
     except Exception as e:  # noqa: BLE001
         log.warning("hunt task %s  sandbox create failed: %s: %s", task_id, type(e).__name__, e)
         return None
+    # A legacy provider whose create() mutates itself and returns nothing is
+    # its own (single, shared) handle; `run` keeps such providers sequential.
+    return provider if handle is None else handle
 
 
 def _destroy_sandbox(sandbox) -> None:
@@ -622,9 +685,14 @@ def _persist_wish(store, run_id: str, task_id: str, w: dict) -> None:
         log.warning("hunt  could not persist wish for %s: %s", task_id, e)
 
 
-def _drain_forks(ws: Path) -> list[dict]:
+def _drain_forks(ws: Path, batch_order: list[str] | None = None) -> list[dict]:
     """Forks are staged to workspace/recon/forks.jsonl by the tool; turn any
-    un-consumed ones into queue tasks for the next continuation."""
+    un-consumed ones into queue tasks for the next continuation.
+
+    Concurrent tasks append in completion order, so the result is re-sorted
+    (stably) by the parent task's position in `batch_order` — the queue order
+    a sequential run would have produced. Forks with no known parent (left over
+    from an interrupted run) keep their file order, at the end."""
     fp = ws / "recon" / "forks.jsonl"
     if not fp.is_file():
         return []
@@ -637,6 +705,9 @@ def _drain_forks(ws: Path) -> list[dict]:
         fp.unlink()
     except Exception:  # noqa: BLE001
         return []
+    if batch_order:
+        pos = {tid: i for i, tid in enumerate(batch_order)}
+        out.sort(key=lambda f: pos.get(f.get("forked_from"), len(pos)))
     return out
 
 
@@ -650,15 +721,16 @@ def _append_coverage(ws: Path, task: dict, lines: list[str]) -> None:
         f"scope: {task.get('scope_hint', '(none)')}",
         *lines,
     ]
-    with p.open("a") as fh:
+    with _IO_LOCK, p.open("a") as fh:
         fh.write("\n".join(block) + "\n")
 
 
 def _log_error(path: Path, stage: str, unit: str, detail: str) -> None:
     log.warning("%s[%s] failed: %s", stage, unit, detail[:300])
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a") as fh:
-            fh.write(json.dumps({"stage": stage, "unit": unit, "detail": detail[:2000]}) + "\n")
+        with _IO_LOCK:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a") as fh:
+                fh.write(json.dumps({"stage": stage, "unit": unit, "detail": detail[:2000]}) + "\n")
     except Exception as e:  # noqa: BLE001
         log.debug("could not append to %s: %s", path, e)

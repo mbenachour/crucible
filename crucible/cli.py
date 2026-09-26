@@ -67,7 +67,7 @@ def run(
     import time
 
     _load_dotenv()
-    from crucible.config import apply_file_tracing_env, load_registry
+    from crucible.config import apply_file_hunt_env, apply_file_tracing_env, load_registry
     from crucible.graph.build import STAGE_NODES, StopAfterStage, build_graph
     from crucible.graph.deps import NodeDeps
     from crucible.llm.registry import ModelRole
@@ -89,6 +89,7 @@ def run(
 
     log = configure_logging(workspace)
     apply_file_tracing_env(config or None)  # config.yaml `tracing:` -> env (env still wins)
+    apply_file_hunt_env(config or None)  # config.yaml `hunt:` -> env (env still wins)
     setup_tracing()  # opt-in via CRUCIBLE_OTEL / OTEL_EXPORTER_OTLP_ENDPOINT / LangSmith
     started = time.monotonic()
 

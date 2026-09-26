@@ -110,12 +110,20 @@ class DockerSandbox(Sandbox):
 
 
 class DockerSandboxProvider:
-    """Implements `crucible.sandbox.SandboxProvider`."""
+    """Implements `crucible.sandbox.SandboxProvider`.
+
+    Stateless beyond its config (issue #98): every `create()` starts its own
+    uniquely named container and returns its own `DockerSandbox` handle, so
+    concurrent Hunt tasks can never exec into each other's container. There is
+    deliberately no provider-level `exec`/`destroy` — that was a single shared
+    "current container" slot, which concurrent tasks would overwrite.
+    """
+
+    concurrent_sandboxes = True  # see crucible.sandbox.supports_concurrency
 
     def __init__(self, image: str = DEFAULT_IMAGE) -> None:
         self.image = image
         self._docker = _docker()
-        self._current: DockerSandbox | None = None
 
     def create(self, task_id: str, repo_mount: str, limits: SandboxLimits) -> DockerSandbox:
         src = Path(repo_mount).resolve()
@@ -141,18 +149,7 @@ class DockerSandboxProvider:
         proc = subprocess.run(args, capture_output=True, text=True)
         if proc.returncode != 0:
             raise RuntimeError(f"docker run failed: {proc.stderr.strip()}")
-        self._current = DockerSandbox(proc.stdout.strip(), self._docker)
-        return self._current
-
-    def exec(self, cmd: str, timeout_s: int) -> ExecResult:
-        if self._current is None:
-            raise RuntimeError("no sandbox created")
-        return self._current.exec(cmd, timeout_s)
-
-    def destroy(self) -> None:
-        if self._current is not None:
-            self._current.destroy()
-            self._current = None
+        return DockerSandbox(proc.stdout.strip(), self._docker)
 
 
 def assert_boot_environment() -> None:

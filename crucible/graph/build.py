@@ -218,7 +218,7 @@ def build_graph(
         ("recon", "hunt"),
         # Phase 2 producer-consumer loop (§11, issue #22): hunt output -> dedup
         # -> validate -> gapfill/feedback re-queue -> back to hunt, bounded by
-        # MAX_CYCLES.
+        # hooks.max_cycles().
         ("dedup", "validate_mechanical"),
         ("validate_mechanical", "gapfill"),
         ("gapfill", "feedback"),
