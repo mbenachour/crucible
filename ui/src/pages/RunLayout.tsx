@@ -9,6 +9,7 @@ import type { Run } from "../api/types";
 
 const TABS = [
   { to: "", label: "Overview", end: true },
+  { to: "progress", label: "Live progress" },
   { to: "findings", label: "Findings" },
   { to: "report", label: "Report" },
   { to: "recon", label: "Recon" },
@@ -134,6 +135,7 @@ function LaunchBanner({ run }: { run: Run }) {
         return (
           <div className="banner warn">
             <span className="dim">⟳</span> Run in progress —{" "}
+            <Link to={`/runs/${run.run_id}/progress`}>follow progress</Link> ·{" "}
             <Link to={`/runs/${run.run_id}/logs`}>watch live logs</Link>
           </div>
         );

@@ -15,6 +15,7 @@ import { RunLogs } from "./pages/RunLogs";
 import { Wishlist } from "./pages/Wishlist";
 import { Artifacts } from "./pages/Artifacts";
 import { Settings } from "./pages/Settings";
+import { LiveProgress } from "./progress/LiveProgress";
 
 const qc = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 10_000 } },
@@ -53,6 +54,7 @@ const router = createBrowserRouter([
         element: <RunLayout />,
         children: [
           { index: true, element: <RunOverview /> },
+          { path: "progress", element: <LiveProgress /> },
           { path: "findings", element: <Findings /> },
           { path: "report", element: <Report /> },
           { path: "recon", element: <Recon /> },

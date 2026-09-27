@@ -1,8 +1,21 @@
-export function relTime(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return "—";
-  const s = Math.round((Date.now() - t) / 1000);
+/** An API timestamp as epoch ms. The API serializes naive UTC datetimes
+ * ("2026-09-26T20:09:29.7", no zone), which `new Date()` would read as
+ * browser-local time — so a zone-less value is taken as UTC. */
+export function apiInstant(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const zoned = /(Z|[+-]\d\d:?\d\d)$/.test(iso) ? iso : `${iso}Z`;
+  const t = new Date(zoned).getTime();
+  return Number.isNaN(t) ? null : t;
+}
+
+/** "5m ago" / "in 2h". Reading a zone-less API timestamp as local time used
+ * to put every timestamp hours off (issue #103: "started in 4h" for a run
+ * that had just finished); a few seconds of clock skew reads as "just now". */
+export function relTime(iso: string | null | undefined, now: number = Date.now()): string {
+  const t = apiInstant(iso);
+  if (t === null) return "—";
+  const s = Math.floor((now - t) / 1000);
+  if (s > -60 && s < 5) return "just now";
   const abs = Math.abs(s);
   const units: [number, string][] = [
     [60, "s"],
@@ -21,14 +34,14 @@ export function relTime(iso: string | null | undefined): string {
       break;
     }
   }
-  const n = Math.round(abs / div);
+  // floor, not round: 59m 50s is "59m ago", never "60m ago"
+  const n = Math.floor(abs / div);
   return s >= 0 ? `${n}${label} ago` : `in ${n}${label}`;
 }
 
 export function absTime(iso: string | null | undefined): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "" : d.toLocaleString();
+  const t = apiInstant(iso);
+  return t === null ? "" : new Date(t).toLocaleString();
 }
 
 export function bytes(n: number): string {
