@@ -7,6 +7,7 @@ field order for vLLM guided-JSON generation.
 
 from __future__ import annotations
 
+import re
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -50,6 +51,23 @@ _PRIVILEGE_IMPACT_PAIRS = [
     (r"\bauthenticated admin\b", r"\badmin (panel|action|endpoint)\b"),
 ]
 
+# An attacker who can already write to the repo controls the product's code, so
+# any impact they claim crosses no boundary (issue #105). Unlike the pairs above
+# this needs no impact match.
+_INSIDER_ATTACKER = [
+    r"\b(push|commit|merge|write)\s+(access|rights|permissions?|privileges?)\b",
+    r"\b(repo|repository)\s+(maintainer|owner|admin|administrator|collaborator)s?\b",
+    r"\bcollaborators?\b",
+    r"\bmaintainers?\b",
+    r"\bcan\s+(modify|edit|change|alter|write\s+to|commit\s+to)\s+(the\s+|a\s+)?"
+    r"[\w./-]*(workflow|package\.json|config|source|repo|repository|codebase)",
+]
+# A compromised third party (upstream action, dependency, registry) is a real
+# boundary even when its description mentions a maintainer or write access.
+_UPSTREAM_COMPROMISE = re.compile(
+    r"compromis|upstream|third[- ]party|dependenc|supply[- ]chain|registry|typosquat"
+)
+
 # Tests that prove nothing on their own ("exec() executes things, therefore
 # critical"). Used as a soft signal alongside the PoC gate.
 _TAUTOLOGICAL_TEST_MARKERS = [
@@ -60,11 +78,18 @@ _TAUTOLOGICAL_TEST_MARKERS = [
 
 def tautology_reasons(finding: Finding) -> list[str]:
     """Return a list of deny-list hits. Empty list == accepted."""
-    import re
-
     reasons: list[str] = []
     attacker = finding.threat_model.attacker.lower()
     impact = f"{finding.title} {finding.description}".lower()
+
+    if not _UPSTREAM_COMPROMISE.search(attacker):
+        for pat in _INSIDER_ATTACKER:
+            if re.search(pat, attacker):
+                reasons.append(
+                    "tautology: attacker already has write access to the repository "
+                    f"({pat}), which already implies control of the product's code"
+                )
+                break
 
     for priv_pat, impact_pat in _PRIVILEGE_IMPACT_PAIRS:
         if re.search(priv_pat, attacker) and re.search(impact_pat, impact):
