@@ -17,3 +17,6 @@ class NodeDeps:
     store: Any               # crucible.store.dao.Store
     sandbox_provider: Any    # crucible.sandbox.SandboxProvider (may be None until built)
     config_path: str | None = None
+    # crucible.sandbox.prepare.PreparedRepo — the repo plus installed deps that
+    # Hunt sandboxes and the PoC gate mount (issue #9). None without a sandbox.
+    prepared_repo: Any = None

@@ -97,12 +97,15 @@ def run(
     store = Store(store_url)
     registry = load_registry(config or None, run_override, store=store)
 
+    from crucible.sandbox.prepare import detect_ecosystem
+
     sandbox_provider = None
     if not no_sandbox:
         from crucible.sandbox.docker import DockerSandboxProvider, assert_boot_environment
 
         assert_boot_environment()  # fail loudly on the nested-container trap (§10)
-        sandbox_provider = DockerSandboxProvider()
+        # The image matches the repo so a PoC can use its language's runtime.
+        sandbox_provider = DockerSandboxProvider(image=detect_ecosystem(repo).image)
 
     repo_commit = git_commit(repo)
     language = primary_language(repo)
@@ -125,11 +128,24 @@ def run(
             # existed before the repo was even cloned; fill in what it now knows.
             store.set_repo_info(run_id, str(repo), repo_commit, str(workspace.resolve()))
 
+    prepared = None
+    if sandbox_provider is not None:
+        from crucible.sandbox.prepare import prepare_repo, prepared_dir_for
+        from crucible.validation.poc_gate import gate_mode
+
+        if gate_mode() != "off":
+            prepared = prepare_repo(repo, prepared_dir_for(workspace), sandbox_provider,
+                                    commit=repo_commit)
+            log.info("prepared tree  %s  ecosystem=%s  deps=%s",
+                     prepared.path, prepared.ecosystem,
+                     "installed" if prepared.installed else prepared.detail[:120])
+
     deps = NodeDeps(
         registry=registry,
         store=store,
         sandbox_provider=sandbox_provider,
         config_path=config or None,
+        prepared_repo=prepared,
     )
     graph = build_graph(deps, checkpoint_db, stop_after=stop_after_stage or None)
 

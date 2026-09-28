@@ -113,6 +113,8 @@ def _render_finding(store, row) -> dict:
         "threat_model": p.get("threat_model", {}),
         "description": p.get("description", ""),
         "poc_test": p.get("poc_test", ""),
+        "poc_filename": p.get("poc_filename", ""),
+        "poc_command": p.get("poc_command", ""),
         "proposed_patch": p.get("proposed_patch", ""),
         "provenance": {
             "hunter_model": getattr(row, "hunter_model", ""),
@@ -155,6 +157,8 @@ def _markdown(report: dict, store=None) -> str:
             "",
             "<details><summary>PoC test</summary>",
             "",
+            *([(f"Run `{f['poc_command']}` from the repo root, with the PoC written to "
+                f"`{f['poc_filename']}`."), ""] if f.get("poc_command") else []),
             "```",
             f["poc_test"].strip(),
             "```",
