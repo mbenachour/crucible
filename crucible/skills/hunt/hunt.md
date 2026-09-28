@@ -50,6 +50,14 @@ So: commit to a **real attacker and a real boundary first**, then show the
 defect, then show a PoC that fails on the clean repo and passes with your
 patch.
 
+**The attacker is never someone who can already write to this repo.** A
+contributor, maintainer, or anyone with push access can change the source
+directly, so nothing they do through a build script, workflow file or config
+value crosses a boundary. Findings with that attacker are rejected
+automatically. For CI and build-pipeline issues, the real attacker is usually
+whoever compromises something *upstream*: a third-party GitHub Action, an npm
+dependency, the package registry.
+
 ## Output contract
 
 When you have finished exploring you will be asked once for a structured
