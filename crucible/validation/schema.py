@@ -35,6 +35,20 @@ class Finding(BaseModel):
     line_end: int
     description: str
     poc_test: str = Field(..., description="test source")
+    # How the PoC gate runs `poc_test` (issue #9). Defaults keep findings
+    # stored before the gate existed loadable; the gate rejects an empty
+    # command.
+    poc_filename: str = Field(
+        default="",
+        description="repo-relative path to write poc_test to; must be a NEW file, "
+                    "e.g. 'crucible_poc_test.py' or 'src/crucible-poc.spec.ts'",
+    )
+    poc_command: str = Field(
+        default="",
+        description="shell command run from the repo root; must exit non-zero on the "
+                    "unmodified repo and 0 once proposed_patch is applied, e.g. "
+                    "'python3 crucible_poc_test.py' or 'npx vitest run src/crucible-poc.spec.ts'",
+    )
     proposed_patch: str = Field(..., description="unified diff")
     severity: Severity
 

@@ -165,6 +165,9 @@ class FindingOut(BaseModel):
     description: str = ""
     threat_model: ThreatModel | dict | None = None
     poc_test: str = ""
+    # How the PoC gate ran poc_test (issue #9); empty for older findings.
+    poc_filename: str = ""
+    poc_command: str = ""
     proposed_patch: str = ""
     provenance: dict = Field(default_factory=dict)
     duplicate_of: str | None = None

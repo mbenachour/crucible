@@ -10,11 +10,12 @@ Checks:
   * PoC gate: test FAILS on the unmodified repo and PASSES with the patch
     applied. Any source modification outside the patch invalidates the finding.
 
-The PoC gate itself (`mechanical._check_poc_gate`) is still fail-closed pending
-the sandbox exec path (issue #9). What this node does now: it loads each finding
-from the store, runs the deterministic gates, and **persists** the verdict
-(`FindingRow.status` + a `ValidationRow`) so the Phase 2 loop has a real funnel
-and Feedback (issue #21) has a validation-failure signal to act on.
+The PoC gate (`crucible.validation.poc_gate`, issue #9) runs last, in a sandbox
+built from the prepared tree, and only for findings that passed everything
+else. This node loads each finding from the store, runs the gates, and
+**persists** the verdict (`FindingRow.status` + a `ValidationRow`) so the
+Phase 2 loop has a real funnel and Feedback (issue #21) has a
+validation-failure signal to act on.
 """
 
 from __future__ import annotations
@@ -40,6 +41,8 @@ def run(state: CrucibleState, deps=None) -> CrucibleState:
             repo_commit=state["repo_commit"],
             workspace_path=state["workspace_path"],
             store=store,
+            sandbox_provider=getattr(deps, "sandbox_provider", None),
+            prepared=getattr(deps, "prepared_repo", None),
         )
         ok = result.status is MechStatus.PASSED
         passed += ok

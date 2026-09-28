@@ -32,6 +32,8 @@ def check_finding(
     repo_commit: str,
     workspace_path: str,
     store=None,
+    sandbox_provider=None,
+    prepared=None,
 ) -> MechResult:
     """Run every deterministic gate; accumulate failure reasons."""
     reasons: list[str] = []
@@ -45,7 +47,13 @@ def check_finding(
     reasons += _check_patch_applies(finding, repo_path, repo_commit)
     reasons += _check_patch_artifacts(finding, repo_path)
     reasons += _check_poc_parses(finding)
-    reasons += _check_poc_gate(finding, repo_path, repo_commit, workspace_path)
+    if not reasons:
+        # Last and costliest: a sandbox run. Pointless once anything above failed.
+        from crucible.validation.poc_gate import poc_gate_reasons
+
+        reasons += poc_gate_reasons(
+            finding, provider=sandbox_provider, prepared=prepared, task_id=finding_id,
+        )
 
     status = MechStatus.PASSED if not reasons else MechStatus.MECHANICAL_FAILED
     return MechResult(finding_id, status, reasons)
@@ -266,18 +274,3 @@ def _check_poc_parses(finding) -> list[str]:
     return []
 
 
-def _check_poc_gate(finding, repo_path: str, repo_commit: str, workspace_path: str) -> list[str]:
-    """PoC gate: test FAILS on the unmodified repo and PASSES with the patch
-    applied. Any source modification outside the patch invalidates the finding.
-
-    Sandbox execution of the PoC is issue #9 — until it lands this is
-    **advisory**, not blocking: the deterministic checks above (path, schema,
-    tautology deny-list, patch-applies, poc parses) still gate Pass A, and the
-    two model passes (bug / reachability) do the adversarial work. Set
-    ``CRUCIBLE_POC_GATE=strict`` to restore the fail-closed behaviour.
-    """
-    import os
-
-    if os.environ.get("CRUCIBLE_POC_GATE", "").strip().lower() == "strict":
-        return ["poc_gate: strict mode and sandbox execution not implemented (issue #9)"]
-    return []

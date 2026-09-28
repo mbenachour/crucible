@@ -54,6 +54,8 @@ def finding_out(f: FindingRow, *, trail: list[ValidationRow] | None = None) -> F
         description=p.get("description", ""),
         threat_model=p.get("threat_model"),
         poc_test=p.get("poc_test", ""),
+        poc_filename=p.get("poc_filename", ""),
+        poc_command=p.get("poc_command", ""),
         proposed_patch=p.get("proposed_patch", ""),
         provenance={
             "hunter_model": f.hunter_model,

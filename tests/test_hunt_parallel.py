@@ -148,7 +148,7 @@ def fake_agent(monkeypatch):
         # `n` tool calls: odd tasks come back shallow (0) and get re-queued once
         return [], (0 if i % 2 else 3)
 
-    def fake_emit(model, system_prompt, task_text, digest, *, repo=None):
+    def fake_emit(model, system_prompt, task_text, digest, *, repo=None, poc_check=None):
         i = int(task_text.split("# Hunt task t", 1)[1][:2])
         if i % 2 == 0:
             return hunt.HuntResult(finding_found=True, finding=_FINDING)

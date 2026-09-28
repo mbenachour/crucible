@@ -55,6 +55,12 @@ export function FindingDetail() {
 
             <h2>PoC test</h2>
             <div>
+              {f.poc_command && (
+                <div className="dim" style={{ marginBottom: 6 }}>
+                  Run <code className="mono">{f.poc_command}</code> from the repo root, with the
+                  PoC saved as <code className="mono">{f.poc_filename}</code>.
+                </div>
+              )}
               <Copy text={f.poc_test} label="copy poc" />
               <pre className="code">{f.poc_test || "—"}</pre>
             </div>

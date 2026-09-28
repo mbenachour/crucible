@@ -140,7 +140,11 @@ class DockerSandboxProvider:
             "--pids-limit", str(limits.max_pids),
             "--memory", f"{limits.memory_mb}m",
             "--cpus", str(max(1, limits.cpu_seconds // 30) or 1),
-            "--tmpfs", f"{SCRATCH_MOUNT}:rw,size={limits.disk_quota_mb}m,mode=1777",
+            # `exec`: package-manager bin shims (node_modules/.bin/*) are run
+            # directly, and a noexec scratch breaks every JS test runner.
+            "--tmpfs", f"{SCRATCH_MOUNT}:rw,exec,size={limits.disk_quota_mb}m,mode=1777",
+            "--tmpfs", f"/tmp:rw,exec,size={min(1024, limits.disk_quota_mb)}m,mode=1777",
+            *_run_env(),
             "-v", f"{src}:{SOURCE_MOUNT}:ro",
             "-w", SCRATCH_MOUNT,
             self.image,
@@ -150,6 +154,49 @@ class DockerSandboxProvider:
         if proc.returncode != 0:
             raise RuntimeError(f"docker run failed: {proc.stderr.strip()}")
         return DockerSandbox(proc.stdout.strip(), self._docker)
+
+    def install_dependencies(self, host_dir: str, image: str, cmd: str, timeout_s: int) -> ExecResult:
+        """Run a dependency install into `host_dir` (issue #9). The one sandbox
+        step with network access — a package manager can't install offline.
+        Everything else still applies: no capabilities, no privilege gain,
+        resource ceilings, and the caller disables lifecycle scripts. Runs as
+        the host user so the installed files stay owned by it."""
+        name = f"crucible-install-{uuid.uuid4().hex[:8]}"
+        args = [
+            self._docker, "run", "--rm", "--name", name,
+            "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges",
+            "--pids-limit", "1024",
+            "--memory", "4096m",
+            *_host_user(),
+            "--tmpfs", "/tmp:rw,exec,size=4096m,mode=1777",
+            *_run_env(),
+            "-e", "COREPACK_ENABLE_DOWNLOAD_PROMPT=0",
+            "-v", f"{Path(host_dir).resolve()}:/work",
+            "-w", "/work",
+            image, "bash", "-lc", cmd,
+        ]
+        try:
+            proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout_s, check=False)
+        except subprocess.TimeoutExpired:
+            subprocess.run([self._docker, "rm", "-f", name], capture_output=True, text=True, check=False)
+            return ExecResult(exit_code=124, stdout="", stderr="[install timed out]", timed_out=True)
+        return ExecResult(exit_code=proc.returncode, stdout=proc.stdout, stderr=proc.stderr)
+
+
+def _run_env() -> list[str]:
+    from crucible.sandbox.prepare import PYTHONPATH
+
+    # HOME on the writable tmpfs; CI=1 keeps test runners out of watch mode.
+    return ["-e", "HOME=/tmp", "-e", "CI=1", "-e", f"PYTHONPATH={PYTHONPATH}"]
+
+
+def _host_user() -> list[str]:
+    import os
+
+    if hasattr(os, "getuid"):
+        return ["--user", f"{os.getuid()}:{os.getgid()}"]
+    return []
 
 
 def assert_boot_environment() -> None:

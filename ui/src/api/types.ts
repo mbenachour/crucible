@@ -168,6 +168,9 @@ export interface Finding {
   description: string;
   threat_model: ThreatModel | Record<string, string> | null;
   poc_test: string;
+  // How the PoC gate ran poc_test (issue #9); empty for older findings.
+  poc_filename: string;
+  poc_command: string;
   proposed_patch: string;
   provenance: Record<string, unknown>;
   duplicate_of: string | null;

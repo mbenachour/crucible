@@ -246,6 +246,16 @@
             ],
             "title": "Line Start"
           },
+          "poc_command": {
+            "default": "",
+            "title": "Poc Command",
+            "type": "string"
+          },
+          "poc_filename": {
+            "default": "",
+            "title": "Poc Filename",
+            "type": "string"
+          },
           "poc_test": {
             "default": "",
             "title": "Poc Test",

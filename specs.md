@@ -251,6 +251,8 @@ One task = one attack class + one scope hint + `architecture.md` + prior coverag
   "line_start": 142, "line_end": 158,
   "description": "...",
   "poc_test": "<test source>",
+  "poc_filename": "crucible_poc_test.py",
+  "poc_command": "python3 crucible_poc_test.py",
   "proposed_patch": "<unified diff>",
   "severity": "high"
 }
@@ -275,7 +277,7 @@ When an agent needs something it doesn't have — a build environment, a VM, pro
 - Schema conformant, `threat_model` populated
 - Patch applies cleanly to the unmodified tree (dry run, revert)
 - `poc_test` parses
-- **PoC gate:** test fails on the unmodified repo (demonstrating the bug) and passes with the patch applied. Any source modification outside the patch invalidates the finding
+- **PoC gate:** test fails on the unmodified repo (demonstrating the bug) and passes with the patch applied. Any source modification outside the patch invalidates the finding. It runs `poc_command` in a sandbox built from the *prepared tree*: the repo plus its dependencies, installed once per run in a container that is the only sandbox step allowed network access, with package lifecycle scripts disabled. A clean-run failure that comes from the PoC not running (missing module, syntax error, no tests found) doesn't count as demonstrating the bug. `CRUCIBLE_POC_GATE` = `enforce` (default) | `advisory` | `off`
 
 Failure → `mechanical_failed`. No model call spent. Cheapest filter first.
 

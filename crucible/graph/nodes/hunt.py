@@ -48,7 +48,7 @@ from crucible.config import MODEL_CALLS_PER_TASK, hunt_settings
 from crucible.graph.hooks import MAX_CONTINUATIONS
 from crucible.graph.state import CrucibleState
 from crucible.obs import progress, span
-from crucible.sandbox import SandboxLimits, supports_concurrency
+from crucible.sandbox import supports_concurrency
 from crucible.validation.schema import Finding, tautology_reasons
 from crucible.workspace import layout
 from crucible.workspace.fs import commit_node
@@ -249,7 +249,18 @@ def _hunt_one(
 
     forks: list[dict] = []
     wishes: list[dict] = []
-    sandbox = _make_sandbox(sandbox_provider, task_id, repo)
+    # The sandbox mounts the prepared tree (repo + installed deps, issue #9) so a
+    # PoC can be rehearsed exactly as the gate will run it; file tools read the
+    # plain repo.
+    prepared = getattr(deps, "prepared_repo", None)
+    sandbox = _make_sandbox(sandbox_provider, task_id, prepared.path if prepared else repo)
+    poc_check = None
+    if sandbox_provider is not None and prepared is not None:
+        from crucible.validation.poc_gate import poc_gate_reasons
+
+        def poc_check(finding):
+            return poc_gate_reasons(finding, provider=sandbox_provider, prepared=prepared,
+                                    task_id=task_id)
     try:
         tools = _hunt_tools(
             repo=repo, sandbox=sandbox, task=task, ws=ws, forks=forks, wishes=wishes,
@@ -257,14 +268,16 @@ def _hunt_one(
         )
         allowed = {t.name for t in tools}
         system_prompt = _hunt_system_prompt()
-        task_text = _hunt_task_text(task, arch_md, methodology, catalog, sandbox is not None)
+        task_text = _hunt_task_text(task, arch_md, methodology, catalog, sandbox is not None,
+                                    prepared=prepared)
 
         msgs, n_toolcalls = _explore(
             deps=deps, run_id=run_id, thread_id=f"{run_id}:hunt:{task_id}",
             tools=tools, allowed=allowed, system_prompt=system_prompt, task_text=task_text,
         )
         model = registry.chat_model(ModelRole.HUNTER)
-        result = _emit(model, system_prompt, task_text, _digest(msgs), repo=repo)
+        result = _emit(model, system_prompt, task_text, _digest(msgs), repo=repo,
+                       poc_check=poc_check)
     finally:
         _destroy_sandbox(sandbox)
 
@@ -345,7 +358,10 @@ def _explore(
     return messages, n
 
 
-def _emit(model, system_prompt: str, task_text: str, digest: str, *, repo: str | None = None) -> HuntResult | None:
+def _emit(
+    model, system_prompt: str, task_text: str, digest: str, *,
+    repo: str | None = None, poc_check=None,
+) -> HuntResult | None:
     """Phase B — one forced structured emission from the gathered context.
 
     Each attempt is a **fresh** two-message request (system + human, no
@@ -361,6 +377,10 @@ def _emit(model, system_prompt: str, task_text: str, digest: str, *, repo: str |
     context/added lines; giving them the exact `git apply` error and one more
     turn fixes most of these, instead of losing the whole finding to
     `mechanical_failed` after the fact with no chance to repair it.
+
+    Once the structure is sound, `poc_check` (when given) runs the real PoC
+    gate, and a failure comes back as a repair turn carrying the gate's own
+    output — the Hunter sees why its PoC didn't prove the bug.
     """
     from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -410,21 +430,37 @@ def _emit(model, system_prompt: str, task_text: str, digest: str, *, repo: str |
         if not (repo and parsed.finding_found and parsed.finding is not None):
             return parsed
         reasons = emit_repair_reasons(parsed.finding, repo)
+        gate_failed = False
+        if not reasons and poc_check is not None:
+            reasons = poc_check(parsed.finding)
+            gate_failed = bool(reasons)
         if not reasons:
             return parsed
         err = "; ".join(reasons)
         if attempt == n_attempts - 1:
-            log.warning("hunt emit: patch/path still broken after repair attempt: %s", err)
+            log.warning("hunt emit: finding still failing after repair attempt: %s", err)
             return parsed  # let Pass A record it as mechanical_failed as before
-        ask = (
-            f"{base_ask}\n\nYour previous `{name}` call's `finding` failed a "
-            f"structural check: {err}\nReturn a corrected call — same "
-            f"evidence and threat model, but a `file_path`/`line_start`/"
-            f"`line_end` that exist in the repo and a `proposed_patch` whose "
-            f"unified-diff hunk header (`@@ -old_start,old_count "
-            f"+new_start,new_count @@`) matches the actual number of context "
-            f"and changed lines that follow it."
-        )
+        if gate_failed:
+            ask = (
+                f"{base_ask}\n\nYour previous `{name}` call's `finding` failed the "
+                f"PoC gate: {err}\nThe gate copies the repo (with dependencies "
+                f"installed), writes `poc_test` to `poc_filename`, and runs "
+                f"`poc_command` from the repo root. It must exit non-zero on the "
+                f"unmodified repo because of the bug itself, then exit 0 once "
+                f"`proposed_patch` is applied. Return a corrected call. If the "
+                f"output shows the bug doesn't reproduce, set `finding_found` false "
+                f"and say so in `negative_note`."
+            )
+        else:
+            ask = (
+                f"{base_ask}\n\nYour previous `{name}` call's `finding` failed a "
+                f"structural check: {err}\nReturn a corrected call — same "
+                f"evidence and threat model, but a `file_path`/`line_start`/"
+                f"`line_end` that exist in the repo and a `proposed_patch` whose "
+                f"unified-diff hunk header (`@@ -old_start,old_count "
+                f"+new_start,new_count @@`) matches the actual number of context "
+                f"and changed lines that follow it."
+            )
     log.warning("hunt emit failed: %s", err)
     return last_parsed
 
@@ -533,11 +569,14 @@ def _hunt_tools(*, repo: str, sandbox, task: dict, ws: Path, forks: list, wishes
 
 def _make_sandbox(provider, task_id: str, repo: str):
     """This task's own sandbox handle (issue #98) — never the shared provider,
-    so concurrent tasks cannot exec into or destroy each other's container."""
+    so concurrent tasks cannot exec into or destroy each other's container.
+    Same limits as the PoC gate, so a rehearsed PoC behaves as it will there."""
+    from crucible.validation.poc_gate import POC_LIMITS
+
     if provider is None:
         return None
     try:
-        handle = provider.create(task_id, repo, SandboxLimits())
+        handle = provider.create(task_id, repo, POC_LIMITS)
     except Exception as e:  # noqa: BLE001
         log.warning("hunt task %s  sandbox create failed: %s: %s", task_id, type(e).__name__, e)
         return None
@@ -599,7 +638,10 @@ def _attack_class_body(attack_class: str) -> tuple[str, str]:
         return generic, f"{attack_class}@generic"
 
 
-def _hunt_task_text(task: dict, arch_md: str, methodology: str, catalog: str, has_sandbox: bool) -> str:
+def _hunt_task_text(
+    task: dict, arch_md: str, methodology: str, catalog: str, has_sandbox: bool,
+    *, prepared=None,
+) -> str:
     chunk_type = task.get("chunk_type", "catch_all")
     framing = {
         "surface": "Recon ranked this entry point at the top of the attack surface. "
@@ -620,6 +662,12 @@ def _hunt_task_text(task: dict, arch_md: str, methodology: str, catalog: str, ha
     sb = ("The sandbox is available via `sandbox_exec` — use it."
           if has_sandbox else
           "NOTE: no sandbox this run — reason from source; wishlist_write if exec is essential.")
+    if has_sandbox and prepared is not None:
+        deps = ("its dependencies are installed" if prepared.installed
+                else f"its dependencies are NOT installed ({prepared.detail[:160]})")
+        sb += (f" `/src` holds the repo ({prepared.ecosystem} project) and {deps}. "
+               "Rehearse your PoC exactly as the gate will run it (see the PoC gate "
+               "section of your instructions).")
     arch = arch_md.strip()
     if len(arch) > 9_000:
         arch = arch[:9_000] + "\n[... architecture.md truncated ...]"
