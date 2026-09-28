@@ -62,7 +62,12 @@ result. Field order is load-bearing — `threat_model` first:
 - `description` — what is wrong and why it is reachable
 - `poc_test` — test source that FAILS on the unmodified repo and PASSES with
   the patch
-- `proposed_patch` — unified diff, minimal
+- `proposed_patch` — unified diff, minimal. Every value in it must be real:
+  no placeholders like `<commit-sha>` or `TODO`, and never a commit SHA you
+  can't verify (you have no network, so you can't look one up). If the fix
+  is "pin to a SHA", say so in the description and recommend a pinning tool
+  (`pinact`, `ratchet`, Dependabot) instead of guessing. Patched JSON, YAML
+  and TOML files must still parse.
 - `severity` — low | medium | high | critical
 
 If after genuine effort you found nothing, say so and record briefly what you
