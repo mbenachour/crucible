@@ -28,6 +28,14 @@ for exactly that reason: `qwen/qwen-2.5-coder-32b-instruct` and
 and `qwen/qwen3-235b-a22b-thinking-2507` (rejects a forced `tool_choice`
 while in its "thinking mode"). Re-verify a new entry against forced
 tool-choice before adding it, not just plain chat.
+
+One entry is a deliberate exception: `z-ai/glm-5.3-flash` passed forced
+tool-choice 3/3 for the flat validator schemas (`BugVerdict`, `ReachVerdict`)
+and 2/3 for `DupeJudgment`, but 0/6 for the Hunter's nested `HuntResult` —
+it returned no tool call or empty arguments after ~45s. Its reasoning mode
+is mandatory (OpenRouter rejects `reasoning.enabled: false`). It's listed
+for every role on request, with the limitation in its label; use it for
+validator_bug / validator_reach, not hunter.
 """
 
 from __future__ import annotations
@@ -60,6 +68,8 @@ CATALOG: list[CatalogModel] = [
     CatalogModel("z-ai/glm-4.7", "GLM 4.7", "glm", "mid"),
     CatalogModel("z-ai/glm-5.1", "GLM 5.1", "glm", "mid"),
     CatalogModel("z-ai/glm-5.3", "GLM 5.3", "glm", "big"),
+    # Validators only in practice; see the module docstring.
+    CatalogModel("z-ai/glm-5.3-flash", "GLM 5.3 Flash (fails as Hunter)", "glm", "small"),
 ]
 
 _BY_ID = {m.id: m for m in CATALOG}
