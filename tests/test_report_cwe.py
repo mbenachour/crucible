@@ -59,3 +59,25 @@ def test_markdown_falls_back_to_bare_id_without_a_store():
     report = {**_BASE_REPORT, "findings": [_finding()]}
     md = _markdown(report)  # no store — e.g. a deterministic/no-registry run
     assert "CWE-89" in md
+
+
+def test_patch_emission_metric_counts_how_patches_were_built():
+    """issue #111: first_try / repaired / unbuilt; pre-#111 findings not counted."""
+    from types import SimpleNamespace
+
+    from crucible.graph.nodes.report import _patch_emission
+
+    def row(patch, emit):
+        p = {"proposed_patch": patch}
+        if emit is not None:
+            p["emit"] = emit
+        return SimpleNamespace(payload=p)
+
+    rows = [
+        row("diff", {"repairs": 0, "patch_errors": []}),
+        row("diff", {"repairs": 1, "patch_errors": []}),
+        row("diff", {"repairs": 0, "patch_errors": ["app.py: unchanged"]}),
+        row("", {"repairs": 0, "patch_errors": ["x"]}),
+        row("old hand-written diff", None),
+    ]
+    assert _patch_emission(rows) == {"first_try": 1, "repaired": 2, "unbuilt": 1}

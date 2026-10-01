@@ -15,6 +15,12 @@ real complexity (per-provider base URLs, API-key env vars, default models,
 UI and per-run override both validate against.
 
 Per-role sampling params are recorded on every finding (see `sampling_params`).
+
+The patch-rewrite model (issue #111) is not a role: it does mechanical text
+editing on the Hunter's behalf, has no lineage constraint, and defaults to the
+Hunter's own model. ``PATCH_REWRITE_MODEL`` (any OpenRouter id) and
+``PATCH_REWRITE_MAX_TOKENS`` (default 16000 — it returns whole files) tune it;
+see `patch_rewrite_endpoint`.
 """
 
 from __future__ import annotations
@@ -50,6 +56,9 @@ class Provider(str, Enum):
 
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_API_KEY_ENV = "OPENROUTER_API_KEY"
+PATCH_REWRITE_MODEL_ENV = "PATCH_REWRITE_MODEL"
+PATCH_REWRITE_MAX_TOKENS_ENV = "PATCH_REWRITE_MAX_TOKENS"
+PATCH_REWRITE_DEFAULT_MAX_TOKENS = 16_000
 
 
 @dataclass(frozen=True)
@@ -123,7 +132,39 @@ class ModelRegistry:
     def chat_model(self, role: ModelRole) -> BaseChatModel:
         if role in self._cache:
             return self._cache[role]
-        e = self._endpoints[role]
+        model = self._build(self._endpoints[role])
+        self._cache[role] = model
+        return model
+
+    def patch_rewrite_endpoint(self) -> ModelEndpoint:
+        """The patch-rewrite model (issue #111): ``PATCH_REWRITE_MODEL`` if set,
+        else the Hunter's model, with the Hunter's base URL and key. Read on
+        every call, like the Hunter's own env overrides at run start. Low
+        temperature — the job is copying text with one change."""
+        h = self._endpoints[ModelRole.HUNTER]
+        raw_max = os.environ.get(PATCH_REWRITE_MAX_TOKENS_ENV, "").strip()
+        try:
+            max_tokens = int(raw_max) if raw_max else PATCH_REWRITE_DEFAULT_MAX_TOKENS
+        except ValueError:
+            raise ValueError(f"{PATCH_REWRITE_MAX_TOKENS_ENV} must be an integer, got {raw_max!r}") from None
+        return ModelEndpoint(
+            role=ModelRole.HUNTER,
+            model=os.environ.get(PATCH_REWRITE_MODEL_ENV, "").strip() or h.model,
+            provider=h.provider,
+            base_url=h.base_url,
+            api_key=h.api_key,
+            temperature=0.0,
+            top_p=h.top_p,
+            num_ctx=h.num_ctx,
+            num_predict=max_tokens,
+            seed=h.seed,
+            extra=h.extra,
+        )
+
+    def patch_rewrite_model(self) -> BaseChatModel:
+        return self._build(self.patch_rewrite_endpoint())
+
+    def _build(self, e: ModelEndpoint) -> BaseChatModel:
         from langchain_openai import ChatOpenAI
 
         or_kwargs: dict = {
@@ -143,9 +184,7 @@ class ModelRegistry:
             },
         }
         or_kwargs.update(dict(e.extra))
-        model = ChatOpenAI(**or_kwargs)
-        self._cache[role] = model
-        return model
+        return ChatOpenAI(**or_kwargs)
 
     # --- constructors --------------------------------------------------
     @classmethod

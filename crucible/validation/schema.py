@@ -53,6 +53,57 @@ class Finding(BaseModel):
     severity: Severity
 
 
+# --- What the Hunter emits (issue #111) -------------------------------------
+#
+# Hunters hand-writing unified diffs got most findings killed at Pass A on
+# corrupt hunks and misquoted context. The Hunter now says *where* and *what*
+# to change; a patch-rewrite model edits the file text and git writes the diff
+# (`crucible.graph.patch_rewrite`, `crucible.validation.patching`).
+
+
+class FixStep(BaseModel):
+    file_path: str = Field(..., description="repo-relative path of the file to change")
+    line_start: int = Field(
+        default=0,
+        description="first line to change, numbered as read_file shows it; 0 for a new file",
+    )
+    line_end: int = Field(
+        default=0, description="last line to change (inclusive); 0 for a new file"
+    )
+    change: str = Field(
+        ..., description="exactly what to change there: the new code, or a precise instruction"
+    )
+    new_file: bool = Field(default=False, description="true to create file_path as a new file")
+
+
+class EmittedFinding(BaseModel):
+    """`Finding` with `fix_plan` in place of `proposed_patch`. Same order, same
+    meaning; `to_finding` swaps the built patch back in."""
+
+    threat_model: ThreatModel
+    title: str
+    file_path: str
+    line_start: int
+    line_end: int
+    description: str
+    poc_test: str = Field(..., description="test source")
+    poc_filename: str = Field(default="", description=Finding.model_fields["poc_filename"].description)
+    poc_command: str = Field(
+        default="",
+        description="shell command run from the repo root; must exit non-zero on the "
+                    "unmodified repo and 0 once the fix_plan is applied, e.g. "
+                    "'python3 crucible_poc_test.py' or 'npx vitest run src/crucible-poc.spec.ts'",
+    )
+    fix_plan: list[FixStep] = Field(
+        ..., description="the minimal fix, as one step per changed region; no diff"
+    )
+    severity: Severity
+
+    def to_finding(self, proposed_patch: str) -> Finding:
+        data = self.model_dump(exclude={"fix_plan"})
+        return Finding(**data, proposed_patch=proposed_patch)
+
+
 # --- Tautology deny-list (parse-time, no model call) -------------------------
 #
 # Reject where threat_model.attacker implies privilege equivalent to the

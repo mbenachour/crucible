@@ -117,3 +117,34 @@ def test_openrouter_hunter_ne_validator_still_enforced(monkeypatch):
         monkeypatch.setenv(f"CRUCIBLE_MODEL_{role}", "deepseek/deepseek-chat-v3.1")
     with pytest.raises(RuntimeError, match="different models"):
         load_registry("/nonexistent.toml")
+
+
+def test_patch_rewrite_defaults_to_the_hunters_model(monkeypatch):
+    from crucible.config import load_registry
+
+    monkeypatch.delenv("PATCH_REWRITE_MODEL", raising=False)
+    monkeypatch.delenv("PATCH_REWRITE_MAX_TOKENS", raising=False)
+    reg = load_registry("/nonexistent.toml")
+    ep = reg.patch_rewrite_endpoint()
+    assert ep.model == reg.endpoint(ModelRole.HUNTER).model
+    assert ep.num_predict == 16_000
+
+
+def test_patch_rewrite_model_and_budget_from_env(monkeypatch):
+    from crucible.config import load_registry
+
+    monkeypatch.setenv("PATCH_REWRITE_MODEL", "deepseek/deepseek-chat-v3.1")
+    monkeypatch.setenv("PATCH_REWRITE_MAX_TOKENS", "8000")
+    monkeypatch.setenv("CRUCIBLE_MODEL_HUNTER", "deepseek/deepseek-v4-flash")
+    reg = load_registry("/nonexistent.toml")
+    ep = reg.patch_rewrite_endpoint()
+    assert (ep.model, ep.num_predict) == ("deepseek/deepseek-chat-v3.1", 8000)
+    assert reg.endpoint(ModelRole.HUNTER).model == "deepseek/deepseek-v4-flash"  # roles untouched
+
+
+def test_patch_rewrite_bad_budget_is_a_clear_error(monkeypatch):
+    from crucible.config import load_registry
+
+    monkeypatch.setenv("PATCH_REWRITE_MAX_TOKENS", "lots")
+    with pytest.raises(ValueError, match="PATCH_REWRITE_MAX_TOKENS"):
+        load_registry("/nonexistent.toml").patch_rewrite_endpoint()

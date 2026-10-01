@@ -17,6 +17,10 @@ plain ReAct agent, then one forced `tool_choice=<schema>` **emit**. Small
 open-weight models almost never call an emit-tool on their own while a
 ToolStrategy is in reach, and `create_agent` discards a plain-text answer.
 
+The emitted finding carries a `fix_plan`, not a diff; `_emit` has a
+patch-rewrite model build `proposed_patch` from it (issue #111,
+`crucible.graph.patch_rewrite`).
+
 Tasks in a batch run concurrently on a thread pool (issue #98) — each owns its
 own sandbox handle, agent, and `thread_id`; everything they share (the run-wide
 fork budget, append-only workspace files, the store) is lock-guarded, and their
@@ -40,6 +44,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError
@@ -49,7 +54,7 @@ from crucible.graph.hooks import MAX_CONTINUATIONS
 from crucible.graph.state import CrucibleState
 from crucible.obs import progress, span
 from crucible.sandbox import supports_concurrency
-from crucible.validation.schema import Finding, tautology_reasons
+from crucible.validation.schema import EmittedFinding, Finding, tautology_reasons
 from crucible.workspace import layout
 from crucible.workspace.fs import commit_node
 
@@ -98,13 +103,46 @@ class _ForkBudget:
 
 class HuntResult(BaseModel):
     """Forced structured emission for one hunt task. `finding` is optional so a
-    genuine negative is a first-class outcome (coverage, not a failure)."""
+    genuine negative is a first-class outcome (coverage, not a failure). The
+    finding carries a `fix_plan`, not a diff (issue #111)."""
 
     finding_found: bool = Field(description="true only if you have a concrete, reachable defect")
-    finding: Finding | None = Field(default=None, description="the finding, when finding_found")
+    finding: EmittedFinding | None = Field(default=None, description="the finding, when finding_found")
     negative_note: str = Field(
         default="", description="if no finding: what you checked and why it looks safe"
     )
+
+
+@dataclass
+class Emission:
+    """What `_emit` hands back: the stored `Finding`, its `proposed_patch` built
+    from the plan, and the payload fields recorded next to it (`fix_plan`,
+    `patch_rewrite`, `emit`)."""
+
+    finding_found: bool
+    finding: Finding | None = None
+    negative_note: str = ""
+    extra: dict = field(default_factory=dict)
+
+
+# A negative whose note is a placeholder, not a reason: the model answered as
+# if exploration had not happened yet ("placeholder — will explore first").
+# Anchored: a bare marker word only counts alone or before a dash/aside, so a
+# reasoned negative that merely mentions "placeholder" (even as its first
+# word) is recorded, not retried.
+_STALLING = re.compile(
+    r"^\W*(?:"
+    r"(?:placeholder|tbd|todo|pending|n/?a)\W*(?:$|[-–—(])"
+    r"|(?:will (?:first )?|going to |need to )(?:explore|investigate|check|look|read|analy[sz]e)"
+    r"|not yet (?:explored|checked|investigated)"
+    r"|to be (?:determined|filled|completed)"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _stalled(note: str) -> bool:
+    return not note.strip() or bool(_STALLING.match(note.strip()))
 
 
 def run(state: CrucibleState, deps=None) -> CrucibleState:
@@ -277,7 +315,8 @@ def _hunt_one(
         )
         model = registry.chat_model(ModelRole.HUNTER)
         result = _emit(model, system_prompt, task_text, _digest(msgs), repo=repo,
-                       poc_check=poc_check)
+                       poc_check=poc_check, rewrite_model=registry.patch_rewrite_model(),
+                       rewrite_model_id=registry.patch_rewrite_endpoint().model)
     finally:
         _destroy_sandbox(sandbox)
 
@@ -298,7 +337,8 @@ def _hunt_one(
         else:
             fid = f"{task_id}-{uuid.uuid4().hex[:6]}"
             with _IO_LOCK:
-                _persist_finding(store, ws, run_id, fid, f, attack_class, prompt_version, registry)
+                _persist_finding(store, ws, run_id, fid, f, attack_class, prompt_version, registry,
+                                 extra=result.extra)
             finding_ids.append(fid)
             coverage_lines.append(
                 f"- **finding {fid}** ({f.severity.value}): {f.title} "
@@ -360,8 +400,8 @@ def _explore(
 
 def _emit(
     model, system_prompt: str, task_text: str, digest: str, *,
-    repo: str | None = None, poc_check=None,
-) -> HuntResult | None:
+    repo: str | None = None, poc_check=None, rewrite_model=None, rewrite_model_id: str = "",
+) -> Emission | None:
     """Phase B — one forced structured emission from the gathered context.
 
     Each attempt is a **fresh** two-message request (system + human, no
@@ -370,21 +410,32 @@ def _emit(
     with "insufficient tool messages following tool_calls message" on the next
     call. The repair signal rides in a new `HumanMessage` instead.
 
-    A parsed `HuntResult` with a finding also gets one structural self-check
-    here — bad line range or a `proposed_patch` that fails `git apply
-    --check` — before it ever reaches Pass A. Hunters (small models
-    especially) hand-write unified-diff hunk headers and reliably miscount
-    context/added lines; giving them the exact `git apply` error and one more
-    turn fixes most of these, instead of losing the whole finding to
-    `mechanical_failed` after the fact with no chance to repair it.
+    The Hunter emits a `fix_plan`, never a diff (issue #111): hand-written
+    hunks were the main way real findings died at Pass A. With a `repo`, the
+    plan is resolved against it and a patch-rewrite model
+    (`crucible.graph.patch_rewrite`, `rewrite_model`, default the Hunter's
+    own) turns it into `proposed_patch`. Repair turns go back to the Hunter
+    only for what it owns:
 
-    Once the structure is sound, `poc_check` (when given) runs the real PoC
-    gate, and a failure comes back as a repair turn carrying the gate's own
-    output — the Hunter sees why its PoC didn't prove the bug.
+    * **structure** — the cited location or a plan step names a file or lines
+      that don't exist. If the model withdraws the finding on this turn, the
+      previous one is kept; a bad citation is not evidence the bug is absent.
+    * **PoC gate** — `poc_check` (when given) runs the real gate once a patch
+      is built, and a failure comes back with the gate's own output.
+
+    A rewrite that fails on its own is not the Hunter's to fix: the finding
+    goes on with an empty `proposed_patch` and Pass A says so. The rewrite is
+    cached by plan, so a PoC repair turn that keeps the plan reuses it.
+
+    A negative whose note is only a placeholder (`_STALLING`) is retried, not
+    recorded as coverage, and a reply cut off by the output-token limit is
+    labelled as such.
     """
     from langchain_core.messages import HumanMessage, SystemMessage
 
+    from crucible.graph import patch_rewrite
     from crucible.validation.mechanical import emit_repair_reasons
+    from crucible.validation.patching import PlanError, resolve_plan
 
     name = HuntResult.__name__
     base_ask = (
@@ -396,25 +447,54 @@ def _emit(
         f"Field order is load-bearing — commit to the threat model first."
     )
     bound = model.bind_tools([HuntResult], tool_choice=name)
+    rewriter = rewrite_model if rewrite_model is not None else model
     err = "model did not call the emit tool"
     ask = base_ask
-    last_parsed: HuntResult | None = None
+    turn = ""  # which repair turn the next response answers
+    repairs = 0
+    patch_errors: list[str] = []
+    rewrite_calls = 0
+    rewrites: dict[str, patch_rewrite.RewriteOutcome] = {}
+    last: tuple[EmittedFinding, str] | None = None  # (finding, built patch)
+
+    def done(ef: EmittedFinding, patch: str) -> Emission:
+        return Emission(
+            finding_found=True,
+            finding=ef.to_finding(patch),
+            extra={
+                "fix_plan": [s.model_dump(mode="json") for s in ef.fix_plan],
+                "patch_rewrite": {
+                    "model": rewrite_model_id,
+                    "prompt_version": patch_rewrite.prompt_version(),
+                    "calls": rewrite_calls,
+                },
+                "emit": {"repairs": repairs, "patch_errors": list(patch_errors)},
+            },
+        )
+
     n_attempts = 3 if repo else 2
     for attempt in range(n_attempts):
+        final = attempt == n_attempts - 1
         try:
             out = bound.invoke([
                 SystemMessage(content=system_prompt), HumanMessage(content=ask),
             ])
         except Exception as e:  # noqa: BLE001 — provider 400 etc; retry once, then give up
             err = f"{type(e).__name__}: {str(e).splitlines()[0]}"
-            if attempt < n_attempts - 1:
-                continue
-            break
+            continue
         calls = getattr(out, "tool_calls", None) or []
         call = next((c for c in calls if c["name"] == name), calls[0] if calls else None)
         if call is None:
-            err = "model did not call the emit tool"
-            ask = f"{base_ask}\n\nYou did not call `{name}`. Call it now, exactly once."
+            meta = getattr(out, "response_metadata", None) or {}
+            if meta.get("finish_reason") == "length":
+                err = "emission cut off at the output-token limit (finish_reason=length)"
+                ask = (f"{base_ask}\n\nYour previous reply ran out of output tokens before "
+                       f"calling `{name}`. Do not deliberate again — call it now, exactly "
+                       f"once, and keep the text fields short.")
+            else:
+                err = "model did not call the emit tool"
+                ask = f"{base_ask}\n\nYou did not call `{name}`. Call it now, exactly once."
+            turn = "no_call"
             continue
         try:
             parsed = HuntResult.model_validate(call["args"])
@@ -425,44 +505,96 @@ def _emit(
                 f"validation: {err}\nReturn a corrected call — same evidence, "
                 f"fixed fields."
             )
+            turn = "schema"
             continue
-        last_parsed = parsed
-        if not (repo and parsed.finding_found and parsed.finding is not None):
-            return parsed
-        reasons = emit_repair_reasons(parsed.finding, repo)
-        gate_failed = False
-        if not reasons and poc_check is not None:
-            reasons = poc_check(parsed.finding)
-            gate_failed = bool(reasons)
-        if not reasons:
-            return parsed
-        err = "; ".join(reasons)
-        if attempt == n_attempts - 1:
-            log.warning("hunt emit: finding still failing after repair attempt: %s", err)
-            return parsed  # let Pass A record it as mechanical_failed as before
-        if gate_failed:
-            ask = (
-                f"{base_ask}\n\nYour previous `{name}` call's `finding` failed the "
-                f"PoC gate: {err}\nThe gate copies the repo (with dependencies "
-                f"installed), writes `poc_test` to `poc_filename`, and runs "
-                f"`poc_command` from the repo root. It must exit non-zero on the "
-                f"unmodified repo because of the bug itself, then exit 0 once "
-                f"`proposed_patch` is applied. Return a corrected call. If the "
-                f"output shows the bug doesn't reproduce, set `finding_found` false "
-                f"and say so in `negative_note`."
-            )
-        else:
+
+        if not parsed.finding_found or parsed.finding is None:
+            if turn == "structure" and last is not None:
+                log.info("hunt emit: finding withdrawn on a structure repair turn — keeping it")
+                return done(*last)
+            if _stalled(parsed.negative_note):
+                err = f"stalled negative: {parsed.negative_note.strip()[:80]!r}"
+                ask = (
+                    f"{base_ask}\n\nYour previous `{name}` call set `finding_found` false "
+                    f"with a placeholder note ({parsed.negative_note.strip()[:80]!r}). "
+                    f"Exploration is over: the evidence above is everything gathered. "
+                    f"Decide now — report the finding, or a negative whose "
+                    f"`negative_note` says what you checked and why it is safe."
+                )
+                turn = "stall"
+                continue
+            return Emission(finding_found=False, negative_note=parsed.negative_note)
+
+        ef = parsed.finding
+        if not repo:
+            return done(ef, "")
+        reasons = emit_repair_reasons(ef, repo)
+        targets = []
+        try:
+            targets = resolve_plan(ef.fix_plan, repo)
+        except PlanError as e:
+            reasons += e.problems
+        if reasons:
+            err = "; ".join(reasons)
+            last = (ef, "")
+            if final:
+                break
+            repairs += 1
+            turn = "structure"
             ask = (
                 f"{base_ask}\n\nYour previous `{name}` call's `finding` failed a "
-                f"structural check: {err}\nReturn a corrected call — same "
-                f"evidence and threat model, but a `file_path`/`line_start`/"
-                f"`line_end` that exist in the repo and a `proposed_patch` whose "
-                f"unified-diff hunk header (`@@ -old_start,old_count "
-                f"+new_start,new_count @@`) matches the actual number of context "
-                f"and changed lines that follow it."
+                f"structural check: {err}\nReturn a corrected call — same evidence "
+                f"and threat model, but a `file_path`/`line_start`/`line_end` and a "
+                f"`fix_plan` whose files and line numbers exist in the repo (line "
+                f"numbers as `read_file` shows them; `new_file: true` to create a file)."
             )
+            continue
+
+        key = json.dumps([s.model_dump(mode="json") for s in ef.fix_plan], sort_keys=True)
+        rw = rewrites.get(key)
+        if rw is None:
+            rw = rewrites[key] = patch_rewrite.rewrite(
+                rewriter, targets, repo, context=_rewrite_context(ef),
+            )
+            rewrite_calls += rw.calls
+            patch_errors += rw.errors
+        last = (ef, rw.patch)
+        if not rw.patch or poc_check is None:
+            return done(ef, rw.patch)
+        gate = poc_check(ef.to_finding(rw.patch))
+        if not gate:
+            return done(ef, rw.patch)
+        err = "; ".join(gate)
+        if final:
+            break
+        repairs += 1
+        turn = "poc"
+        ask = (
+            f"{base_ask}\n\nYour previous `{name}` call's `finding` failed the "
+            f"PoC gate: {err}\nThe gate copies the repo (with dependencies "
+            f"installed), writes `poc_test` to `poc_filename`, and runs "
+            f"`poc_command` from the repo root. It must exit non-zero on the "
+            f"unmodified repo because of the bug itself, then exit 0 once the "
+            f"patch built from your `fix_plan` is applied. That patch was:\n"
+            f"```diff\n{rw.patch[:3000]}\n```\nReturn a corrected call. If the "
+            f"output shows the bug doesn't reproduce, set `finding_found` false "
+            f"and say so in `negative_note`."
+        )
+    if last is not None:
+        log.warning("hunt emit: finding still failing after repair attempts: %s", err)
+        return done(*last)  # let Pass A record it as mechanical_failed
     log.warning("hunt emit failed: %s", err)
-    return last_parsed
+    return None
+
+
+def _rewrite_context(ef: EmittedFinding) -> str:
+    """What the patch-rewrite model needs to know about the bug it is fixing."""
+    return (
+        f"**{ef.title}** at `{ef.file_path}:{ef.line_start}-{ef.line_end}`\n\n"
+        f"Attacker: {ef.threat_model.attacker}. Boundary crossed: "
+        f"{ef.threat_model.boundary_crossed}. Assumption broken: "
+        f"{ef.threat_model.assumption_broken}.\n\n{ef.description.strip()[:2000]}"
+    )
 
 
 def _digest(messages: list, *, budget: int = 16_000) -> str:
@@ -689,11 +821,14 @@ def _hunt_task_text(
 
 
 def _persist_finding(store, ws: Path, run_id: str, fid: str, f: Finding,
-                     attack_class: str, prompt_version: str, registry) -> None:
+                     attack_class: str, prompt_version: str, registry,
+                     extra: dict | None = None) -> None:
     from crucible.llm.registry import ModelRole
     from crucible.store.dao import stable_key
 
-    payload = f.model_dump(mode="json")
+    # `extra` (fix_plan, patch_rewrite, emit — issue #111) rides along in the
+    # payload; `Finding.model_validate` ignores it when Pass A reloads.
+    payload = {**f.model_dump(mode="json"), **(extra or {})}
     # Deterministic, not model output (issue #94) — attack_class is already
     # known from the Hunt task, before the Hunter ever ran. The mapping
     # itself lives in the DB (Store.cwe_for_attack_class, loaded once at

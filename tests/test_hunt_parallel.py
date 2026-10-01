@@ -23,6 +23,7 @@ from crucible.graph import hooks
 from crucible.graph.nodes import hunt
 from crucible.sandbox import SandboxLimits, supports_concurrency
 from crucible.sandbox import docker as docker_mod
+from crucible.validation.schema import Finding
 from crucible.workspace.fs import init_workspace
 
 _REAL_RUN = subprocess.run
@@ -114,7 +115,10 @@ def _state(ws, repo, tasks) -> dict:
 
 
 def _deps(sandbox_provider=None):
-    reg = SimpleNamespace(chat_model=lambda role: object())
+    reg = SimpleNamespace(
+        chat_model=lambda role: object(), patch_rewrite_model=lambda: object(),
+        patch_rewrite_endpoint=lambda: SimpleNamespace(model="fake/rewrite"),
+    )
     return SimpleNamespace(registry=reg, store=None, sandbox_provider=sandbox_provider)
 
 
@@ -148,11 +152,12 @@ def fake_agent(monkeypatch):
         # `n` tool calls: odd tasks come back shallow (0) and get re-queued once
         return [], (0 if i % 2 else 3)
 
-    def fake_emit(model, system_prompt, task_text, digest, *, repo=None, poc_check=None):
+    def fake_emit(model, system_prompt, task_text, digest, *, repo=None, poc_check=None,
+                  rewrite_model=None, rewrite_model_id=""):
         i = int(task_text.split("# Hunt task t", 1)[1][:2])
         if i % 2 == 0:
-            return hunt.HuntResult(finding_found=True, finding=_FINDING)
-        return hunt.HuntResult(finding_found=False, negative_note="looked safe")
+            return hunt.Emission(finding_found=True, finding=Finding.model_validate(_FINDING))
+        return hunt.Emission(finding_found=False, negative_note="looked safe")
 
     monkeypatch.setattr(hunt, "_explore", fake_explore)
     monkeypatch.setattr(hunt, "_emit", fake_emit)

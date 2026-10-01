@@ -35,6 +35,7 @@ def run(state: CrucibleState, deps=None) -> CrucibleState:
 
     with span("report", run_id=run_id, upheld=len(upheld)):
         metrics = _metrics(store, run_id, state)
+        metrics["patch_emission"] = _patch_emission(rows)
         report = {
             "run_id": run_id,
             "repo": state["repo_path"],
@@ -93,6 +94,26 @@ def _metrics(store, run_id: str, state: CrucibleState) -> dict:
         "fork_rate": f"{forks}/{hunt_exec}" if hunt_exec else f"{forks}/0",
         "tool_usage": by_tool,
     }
+
+
+def _patch_emission(rows) -> dict:
+    """How each finding's `proposed_patch` came to be (issue #111): built on the
+    first try, built after a repair (a Hunter repair turn or a rewrite retry),
+    or not built at all. Findings stored before #111 carry no `emit` record and
+    are not counted."""
+    out = {"first_try": 0, "repaired": 0, "unbuilt": 0}
+    for r in rows:
+        p = r.payload or {}
+        emit = p.get("emit")
+        if not isinstance(emit, dict):
+            continue
+        if not (p.get("proposed_patch") or "").strip():
+            out["unbuilt"] += 1
+        elif emit.get("repairs") or emit.get("patch_errors"):
+            out["repaired"] += 1
+        else:
+            out["first_try"] += 1
+    return out
 
 
 def _render_finding(store, row) -> dict:

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from crucible.validation.mechanical import _check_patch_artifacts, emit_repair_reasons
+from crucible.validation.mechanical import _check_patch_artifacts, patch_problems
 
 _PACKAGE_JSON = '{\n  "name": "demo",\n  "scripts": {\n    "build": "vite build"\n  }\n}\n'
 _WORKFLOW = (
@@ -93,9 +93,12 @@ def test_original_repo_is_never_modified(repo):
     assert "actions/checkout@v6" in open(f"{repo}/deploy.yml").read()
 
 
-def test_artifact_problems_reach_the_hunter_repair_turn(repo):
-    """A placeholder is fixable, so it goes back to the Hunter during emit
-    instead of only failing Pass A afterward."""
-    f = _f(_workflow_patch("<commit-sha>"))
-    f.file_path = "deploy.yml"
-    assert any("placeholder" in r for r in emit_repair_reasons(f, repo))
+def test_artifact_problems_reach_the_patch_rewrite_retry(repo):
+    """A placeholder is fixable, so the patch-rewrite step (issue #111) sees it
+    and retries instead of only failing Pass A afterward."""
+    assert any("placeholder" in r for r in patch_problems(_workflow_patch("<commit-sha>"), repo))
+    assert patch_problems(_workflow_patch("v7"), repo) == []
+
+
+def test_empty_patch_is_named_as_such(repo):
+    assert patch_problems("", repo) == ["patch does not apply cleanly: proposed_patch is empty"]
