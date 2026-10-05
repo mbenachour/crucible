@@ -107,30 +107,37 @@ def _check_schema(finding) -> list[str]:
 
 
 def _check_patch_applies(finding, repo_path: str, repo_commit: str) -> list[str]:
+    return _patch_apply_reasons(finding.proposed_patch, repo_path)
+
+
+def _patch_apply_reasons(patch: str, repo_path: str) -> list[str]:
     """Dry-run the unified diff against the unmodified tree, then revert."""
+    if not patch.strip():
+        # The patch-rewrite step could not build one (issue #111).
+        return ["patch does not apply cleanly: proposed_patch is empty"]
     proc = subprocess.run(
         ["git", "-C", repo_path, "apply", "--check", "-"],
-        input=finding.proposed_patch, text=True, capture_output=True, check=False,
+        input=patch, text=True, capture_output=True, check=False,
     )
     if proc.returncode != 0:
         return [f"patch does not apply cleanly: {proc.stderr.strip()}"]
     return []
 
 
+def patch_problems(patch: str, repo_path: str) -> list[str]:
+    """Every Pass A reason that is about the patch alone: it does not apply,
+    adds a placeholder or an invented SHA, or leaves a JSON/YAML/TOML file
+    unparseable. The patch-rewrite step (issue #111) retries on these."""
+    # The file-parse half skips itself when the patch doesn't apply.
+    return _patch_apply_reasons(patch, repo_path) + _patch_artifact_reasons(patch, repo_path)
+
+
 def emit_repair_reasons(finding, repo_path: str) -> list[str]:
-    """Structural reasons worth giving a Hunter one repair attempt on, during
-    Hunt's own emit step rather than only after the fact in Pass A. A bad
-    line range or a diff whose hunk header miscounts context/added lines are
-    mistakes the model can plausibly fix given the exact `git apply` error —
-    unlike a tautological finding or a genuinely unreachable defect, which
-    belong to `_check_schema` / the bug validator and are left alone here."""
-    # Artifact problems ride along with apply errors so one repair turn can
-    # fix both; the file-parse half skips itself when the patch doesn't apply.
-    return (
-        _check_path_and_range(finding, repo_path)
-        + _check_patch_applies(finding, repo_path, "")
-        + _check_patch_artifacts(finding, repo_path)
-    )
+    """Structural reasons worth giving a Hunter a repair turn on, during
+    Hunt's own emit step rather than only after the fact in Pass A. The
+    Hunter no longer writes the patch (issue #111), so only its citation is
+    checked here; patch problems belong to the patch-rewrite step."""
+    return _check_path_and_range(finding, repo_path)
 
 
 # --- post-apply artifact checks (issue #106) --------------------------------
@@ -168,8 +175,12 @@ def _incrementing_run(sha: str) -> int:
 
 
 def _check_patch_artifacts(finding, repo_path: str) -> list[str]:
+    return _patch_artifact_reasons(finding.proposed_patch, repo_path)
+
+
+def _patch_artifact_reasons(patch: str, repo_path: str) -> list[str]:
     reasons: list[str] = []
-    added = _added_lines(finding.proposed_patch)
+    added = _added_lines(patch)
     for line in added:
         m = _PLACEHOLDER.search(line)
         if m:
@@ -183,7 +194,7 @@ def _check_patch_artifacts(finding, repo_path: str) -> list[str]:
                 "tool instead of guessing SHAs"
             )
             break
-    reasons += _check_patched_files_parse(finding.proposed_patch, repo_path)
+    reasons += _check_patched_files_parse(patch, repo_path)
     return reasons
 
 

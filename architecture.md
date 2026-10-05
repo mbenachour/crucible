@@ -441,6 +441,17 @@ guided-JSON generation.
 | `proposed_patch` | unified diff |
 | `severity` | `Severity` enum: low / medium / high / critical |
 
+The Hunter does not write `proposed_patch` (issue #111). It emits
+**`EmittedFinding`** — the same fields with `fix_plan` (a list of `FixStep`:
+`file_path`, `line_start`, `line_end`, `change`, `new_file`) in its place. A
+patch-rewrite model (`crucible/graph/patch_rewrite.py`, prompt
+`skills/patch/rewrite.md`, model `PATCH_REWRITE_MODEL`) returns each planned
+file with the fix made, and `validation/patching.py` splices that back and has
+git write the diff, so the stored patch always applies. The plan, rewrite
+provenance and repair counts are stored next to the finding (`fix_plan`,
+`patch_rewrite`, `emit`); `report.json` summarizes them as
+`metrics.patch_emission`.
+
 **`tautology_reasons(finding) -> list[str]`** — parse-time, no model call. Returns
 deny-list hits (empty = accepted):
 
